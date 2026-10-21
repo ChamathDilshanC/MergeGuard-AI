@@ -47,8 +47,8 @@ flowchart LR
 | Source control integration | GitHub webhooks + REST API, fine-grained PAT | Planned (brief) |
 | Infrastructure as code | Terraform `>= 1.5, < 2.0`; providers `hashicorp/aws` (`~> 5.0` in brief, locked at 5.100.0) and `hashicorp/archive` (`~> 2.4`, locked at 2.8.1) | Skeleton Verified (M1); resources Planned (T-401); AWS major version [OQ-07](PRD.md#17-open-questions) |
 | Async processing | Amazon SQS standard queue + dead-letter queue | Proposed (Phase 2), [ADR-0005](ADR/0005-async-webhook-processing.md) |
-| Dev tooling | `pytest` 9.1.1, `pytest-cov` 7.1.0, `ruff` 0.16.10 (`requirements-dev.txt`); Terraform 1.16.5 and `checkov` 3.3.26 pinned in CI (dev-only) | Verified (M1), except checkov (CI only) |
-| CI/CD | GitHub Actions `ci.yml` (lint, tests, Terraform checks); deploy with AWS access via OIDC role (no static keys) | CI added in M1, pending first run; deploy Proposed (Phase 2) |
+| Dev tooling | `pytest` 9.1.1, `pytest-cov` 7.1.0, `ruff` 0.16.10 (`requirements-dev.txt`); Terraform 1.16.5 and `checkov` 3.3.26 pinned in CI (dev-only) | Verified (M1; checkov in CI only) |
+| CI/CD | GitHub Actions `ci.yml` (lint, tests, Terraform checks); deploy with AWS access via OIDC role (no static keys) | CI Verified (green on PRs #1 and #2 and on `main`); deploy Proposed (Phase 2) |
 
 ## 4. Repository and module map
 

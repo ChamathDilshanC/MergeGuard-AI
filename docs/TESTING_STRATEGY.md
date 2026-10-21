@@ -140,6 +140,6 @@ A PR can merge only when all of these hold:
 | Run tests | `python -m pytest` | Verified (M1) |
 | Coverage | `python -m pytest --cov=src --cov-report=term-missing` | Verified (M1); fails below 85% |
 | Lint / format check | `ruff check .` and `ruff format --check .` | Verified (M1) |
-| Terraform checks | See §5 | `fmt` and `validate` Verified (M1); `checkov` runs in CI only; plan review starts in T-401 |
+| Terraform checks | See §5 | `fmt` and `validate` Verified (M1); `checkov` Verified in CI (not run locally); plan review starts in T-401 |
 
 Quality gates 1–5 in §9 are automated in `.github/workflows/ci.yml`. Gate 5 is the import check in `tests/unit/test_runtime_dependencies.py`. Gate 6 (docs updated) is a review item.

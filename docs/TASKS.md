@@ -36,7 +36,7 @@
 | T-101 | Scaffold layout from [ARCHITECTURE.md](ARCHITECTURE.md) §4.2 and add `.gitignore` | RB-17 | T-002 | `.gitignore` covers `.terraform/`, `*.tfstate*`, `tfplan`, `*.zip`, `terraform.tfvars`, `__pycache__/`, `.venv/`, `.env*`, `tests/ai_eval/results/` | Done |
 | T-102 | Dev tooling: Python 3.12 pin, `requirements-dev.txt` (`pytest`, `pytest-cov`, `ruff`), `pyproject.toml` config | NFR-008, RB-01 | T-101 | `ruff check`, `ruff format --check` and `pytest` run locally; commands in [AGENTS.md](../AGENTS.md) §6 change from Proposed to Verified | Done |
 | T-103 | Terraform skeleton: `versions.tf` and `providers.tf` with pinned versions, `variables.tf` from [DEPLOYMENT.md](DEPLOYMENT.md) §4 | FR-012, OQ-07 | T-101 | `terraform validate` passes; `.terraform.lock.hcl` committed | Done (constraint `~> 5.0` from brief; OQ-07 still open) |
-| T-104 | CI workflow `ci.yml`: lint, tests on 3.12, Terraform fmt/validate, checkov | §9 quality gates in [TESTING_STRATEGY.md](TESTING_STRATEGY.md) | T-102, T-103 | Workflow green on a PR; actions pinned to SHAs | In progress (awaiting first run on a PR) |
+| T-104 | CI workflow `ci.yml`: lint, tests on 3.12, Terraform fmt/validate, checkov | §9 quality gates in [TESTING_STRATEGY.md](TESTING_STRATEGY.md) | T-102, T-103 | Workflow green on a PR; actions pinned to SHAs | Done (green on PRs #1 and #2 and on `main`) |
 
 **M1 notes:**
 

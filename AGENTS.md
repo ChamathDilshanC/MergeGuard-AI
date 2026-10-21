@@ -87,7 +87,7 @@ Run the Python commands inside a Python 3.12 virtual environment, created with `
 | Type check | Not adopted in M1 (T-102): ruff `ANN` rules enforce type hints; revisit `mypy` once M2 code exists | Decided (T-102) |
 | Terraform format | `terraform -chdir=terraform fmt -check -recursive` | Verified (M1, Terraform 1.16.5) |
 | Terraform validate | `terraform -chdir=terraform init -backend=false` then `terraform -chdir=terraform validate` | Verified (M1, Terraform 1.16.5) |
-| Terraform policy scan | `checkov -d terraform` | In CI (checkov 3.3.26); not yet run |
+| Terraform policy scan | `checkov -d terraform` | Verified in CI (checkov 3.3.26); not installed locally |
 | Build package | Built by Terraform `archive_file`; no separate build step | Planned (T-401) |
 | Deploy | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §5 — **maintainer only** | Planned |
 
