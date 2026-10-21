@@ -10,6 +10,11 @@ from enum import StrEnum
 
 from mergeguard.models import AIReview, SecretFinding
 
+# Blocking threshold, open question OQ-04 (docs/PRD.md section 17). The
+# documented default: only LOW risk with no bugs is a plain comment; MEDIUM and
+# HIGH request changes.
+COMMENT_ONLY_RISK_LEVELS = frozenset({"LOW"})
+
 
 class ReviewEvent(StrEnum):
     COMMENT = "COMMENT"
@@ -43,10 +48,14 @@ def decide(
             ReviewEvent.REQUEST_CHANGES, Template.SECURITY, "secret_findings"
         )
     if ai_review is not None:
-        if ai_review.risk_level == "LOW" and ai_review.bugs_found == 0:
+        if (
+            ai_review.risk_level in COMMENT_ONLY_RISK_LEVELS
+            and ai_review.bugs_found == 0
+        ):
             return Decision(ReviewEvent.COMMENT, Template.AI_REVIEW, "low_risk")
         return Decision(ReviewEvent.REQUEST_CHANGES, Template.AI_REVIEW, "risk_or_bugs")
-    if ai_failure is not None:
-        return Decision(ReviewEvent.COMMENT, Template.AI_UNAVAILABLE, ai_failure)
-    # Scan is clean and no AI reviewer is wired in (M2 builds, before M3).
-    return Decision(None, None, "ai_not_enabled")
+    # Clean scan without a usable AI review: say so in a comment. An AI failure
+    # never approves and never blocks (FR-008).
+    return Decision(
+        ReviewEvent.COMMENT, Template.AI_UNAVAILABLE, ai_failure or "unavailable"
+    )

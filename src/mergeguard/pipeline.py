@@ -1,19 +1,27 @@
 """Review pipeline for one pull request: files, duplicate check, secret scan,
-decision, and review (FR-004, FR-006, FR-010, FR-014, FR-015).
+AI review, decision, and review (FR-004 to FR-010, FR-014, FR-015).
 
-M2 has no AI step: a clean scan is logged and skipped (``ai_not_enabled``).
-The AI review is added in M3 between the scan and the decision.
+The AI review runs only when the secret scan is clean (ADR-0004).
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
+from mergeguard.ai_reviewer import AIOutcome
 from mergeguard.github_client import GitHubClient, GitHubError
 from mergeguard.logging_util import JsonLogger
-from mergeguard.models import PullRequestRef
+from mergeguard.models import AIReview, ChangedFile, PullRequestRef
 from mergeguard.policy import ReviewEvent, decide
+from mergeguard.prompts import PROMPT_VERSION
 from mergeguard.render import MARKER_PREFIX, Notices, render_review
 from mergeguard.scanner import scan_files
+
+
+class AIReviewer(Protocol):
+    model: str
+
+    def review(self, files: Sequence[ChangedFile]) -> AIOutcome: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,12 +37,14 @@ class ReviewPipeline:
     def __init__(
         self,
         github: GitHubClient,
+        reviewer: AIReviewer,
         logger: JsonLogger,
         *,
         max_files: int,
         dry_run: bool,
     ) -> None:
         self._github = github
+        self._reviewer = reviewer
         self._log = logger
         self._max_files = max_files
         self._dry_run = dry_run
@@ -52,21 +62,34 @@ class ReviewPipeline:
         findings = scan_files(reviewable)
         rule_ids = sorted({finding.rule_id for finding in findings})
         self._log.log("scan.completed", rule_ids=rule_ids)
-        decision = decide(findings, None, has_patches=bool(reviewable))
+        ai = None
+        if reviewable and not findings:  # never send a diff with secrets (ADR-0004)
+            ai = self._ai_review(reviewable)
+        decision = decide(
+            findings,
+            ai.review if ai else None,
+            ai_failure=ai.failure if ai else None,
+            has_patches=bool(reviewable),
+        )
         if decision.event is None:
             self._log.log("review.skipped", reason=decision.reason)
             return Outcome(200, "skipped", decision.reason)
 
+        partial_ai = ai is not None and ai.review is not None and ai.bundle.truncated
         notices = Notices(
+            diff_limit=ai.bundle.max_chars if partial_ai else None,
+            omitted_files=ai.bundle.omitted_files if partial_ai else (),
             files_cap=self._max_files if capped else None,
             no_patch_files=tuple(f.filename for f in files if not f.patch),
         )
+        review: AIReview | None = ai.review if ai else None
 
         def render(fallback: bool) -> str:
             return render_review(
                 decision,
                 short_sha=pr.short_sha,
                 findings=findings,
+                ai_review=review,
                 notices=notices,
                 fallback=fallback,
             )
@@ -81,6 +104,19 @@ class ReviewPipeline:
             return Outcome(200, "dry_run", decision.event)
         posted = self._post(pr, decision.event, render)
         return Outcome(200, "reviewed", posted)
+
+    def _ai_review(self, files: list[ChangedFile]) -> AIOutcome:
+        ai = self._reviewer.review(files)
+        common = {
+            "model": self._reviewer.model,
+            "prompt_version": PROMPT_VERSION,
+            "duration_ms": ai.duration_ms,
+        }
+        if ai.review is not None:
+            self._log.log("ai.completed", risk_level=ai.review.risk_level, **common)
+        else:  # the raw model output is never logged
+            self._log.log("ai.failed", "WARNING", reason=ai.failure, **common)
+        return ai
 
     def _already_reviewed(self, pr: PullRequestRef) -> bool:
         """True if the bot identity already reviewed this head SHA (FR-014).

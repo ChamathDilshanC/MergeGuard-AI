@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — templates (§5, except §5.6 and `N-SUPPRESSED`), sanitisation, log conventions (§7) and rule IDs (§8) implemented in M2 and snapshot-tested |
+| Status | Draft v0.1 — templates (§5, except §5.6 and `N-SUPPRESSED`), sanitisation, log conventions (§7) and rule IDs (§8) implemented in M2–M3 and snapshot-tested |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) · [API spec](API_SPEC.md) · [AI system](AI_SYSTEM.md) |
 
@@ -149,6 +149,8 @@ No credentials were detected in the added lines. The AI review could not be comp
 <sub>MergeGuard AI · commit `<short-sha>`</sub>
 ````
 
+`<reason-category>` is one of the reasons in [AI_SYSTEM.md](AI_SYSTEM.md) §8, for example `timeout`, `rate_limited`, `invalid_output` or `not_configured`. Anything else renders as `unknown`.
+
 ### 5.4 Notices (appended inside `T-AI` / `T-SEC`)
 
 | ID | Trigger | Text |
@@ -224,7 +226,8 @@ One JSON object per line. Field names are `snake_case`.
 - **Webhook:** `webhook.received`, `webhook.rejected`, `webhook.ignored`, `webhook.completed`, `config.failed`.
 - **Pipeline:** `files.fetched`, `scan.completed`, `review.posted`, `review.fallback_comment`, `review.skipped`, `review.duplicate`, `review.dry_run`.
 - **GitHub errors:** `github.auth_failed`, `github.forbidden`, `github.invalid_request`, `github.rate_limited`, `github.unavailable`, `github.unexpected`.
-- **Other:** `error.unhandled`; `ai.completed` and `ai.failed` arrive with M3.
+- **AI:** `ai.completed` (INFO, with `risk_level`, `model`, `prompt_version`, `duration_ms`) and `ai.failed` (WARNING, with `reason` instead of `risk_level`).
+- **Other:** `error.unhandled`.
 
 `delivery_id` and `github_event` come from request headers, so they are logged only when they match the expected format; otherwise the value `invalid` is used.
 

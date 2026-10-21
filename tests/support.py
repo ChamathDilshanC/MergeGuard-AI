@@ -21,7 +21,11 @@ FIXTURES = Path(__file__).parent / "fixtures"
 AWS_EXAMPLE_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
 TEST_WEBHOOK_SECRET = "test-" + "webhook-secret"
 TEST_GITHUB_TOKEN = "test-" + "github-token"
+TEST_GEMINI_KEY = "test-" + "gemini-key"
 BOT_LOGIN = "mergeguard-bot"
+GEMINI_ROUTE = (
+    r"generativelanguage\.googleapis\.com/v1beta/models/[^/]+:generateContent$"
+)
 HEAD_SHA = "0123456789abcdef0123456789abcdef01234567"
 
 
@@ -149,6 +153,7 @@ class FakeSsm:
             else {
                 "/mergeguard/github_token": TEST_GITHUB_TOKEN,
                 "/mergeguard/webhook_secret": TEST_WEBHOOK_SECRET,
+                "/mergeguard/gemini_api_key": TEST_GEMINI_KEY,
             }
         )
         self.error = error
@@ -168,18 +173,57 @@ class FakeSsm:
         }
 
 
+def review_json(
+    risk: str = "LOW",
+    bugs: int = 0,
+    summary: str = "No issues found.",
+    feedback: str = "- `a.py`: no issues.",
+) -> dict[str, Any]:
+    return {
+        "risk_level": risk,
+        "bugs_found": bugs,
+        "summary": summary,
+        "feedback_markdown": feedback,
+    }
+
+
+def gemini_response(
+    review: Any = None, *, text: str | None = None, finish: str = "STOP"
+) -> HttpResponse:
+    """A mocked generateContent response whose text part carries ``review``."""
+    if text is None:
+        text = json.dumps(review if review is not None else review_json())
+    return json_response(
+        200,
+        {
+            "candidates": [
+                {
+                    "content": {"role": "model", "parts": [{"text": text}]},
+                    "finishReason": finish,
+                }
+            ]
+        },
+    )
+
+
+def fixture_response(relative: str, status: int = 200) -> HttpResponse:
+    return HttpResponse(status, {}, (FIXTURES / relative).read_bytes())
+
+
 def github_api(
     *,
     files: list[dict] | None = None,
     reviews: list[dict] | None = None,
     review_responses: tuple[Any, ...] = (json_response(200, {"id": 1}),),
+    gemini: tuple[Any, ...] = (gemini_response(),),
 ) -> FakeTransport:
-    """A fake GitHub API serving one page of files, the reviews list, the
-    authenticated user and review creation."""
+    """A fake GitHub API (one page of files, reviews, authenticated user, review
+    creation) plus a mocked Gemini endpoint. No real Gemini call is ever made."""
     return (
         FakeTransport()
         .route("GET", r"/pulls/\d+/files", json_response(200, files or []))
         .route("GET", r"/pulls/\d+/reviews", json_response(200, reviews or []))
         .route("GET", r"/user$", json_response(200, {"login": BOT_LOGIN}))
         .route("POST", r"/pulls/\d+/reviews$", *review_responses)
+        .route("POST", GEMINI_ROUTE, *gemini)
     )

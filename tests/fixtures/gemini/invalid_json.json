@@ -1,0 +1,16 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "text": "Sure! Here is my review: {\"risk_level\": \"LOW\", \"bugs_found\": 0"
+          }
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ]
+}

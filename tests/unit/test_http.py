@@ -59,15 +59,24 @@ def test_http_errors_become_responses(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "error", [URLError("dns failure"), TimeoutError(), ConnectionResetError()]
+    ("error", "kind"),
+    [
+        (TimeoutError(), "timeout"),  # read timeout
+        (URLError(TimeoutError("timed out")), "timeout"),  # connect timeout
+        (URLError("dns failure"), "network"),
+        (ConnectionResetError(), "network"),
+    ],
 )
-def test_network_failures_raise_transport_error_without_details(monkeypatch, error):
+def test_network_failures_raise_transport_error_without_details(
+    monkeypatch, error, kind
+):
     def fake_urlopen(request, timeout):
         raise error
 
     monkeypatch.setattr(http, "urlopen", fake_urlopen)
     with pytest.raises(TransportError) as caught:
         urllib_transport("GET", "https://api.github.com/secret-path", {}, None, 5.0)
+    assert caught.value.kind == kind
     assert "secret-path" not in str(caught.value)
 
 

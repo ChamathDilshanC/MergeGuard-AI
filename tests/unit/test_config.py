@@ -3,11 +3,42 @@
 import pytest
 
 from mergeguard.config import ConfigError, SecretStore, Settings
-from support import TEST_GITHUB_TOKEN, TEST_WEBHOOK_SECRET, FakeSsm
+from support import TEST_GEMINI_KEY, TEST_GITHUB_TOKEN, TEST_WEBHOOK_SECRET, FakeSsm
 
 
 def test_settings_defaults():
-    assert Settings.from_env({}) == Settings("/mergeguard", 300, "INFO", False)
+    settings = Settings.from_env({})
+    assert settings == Settings("/mergeguard", 300, "INFO", False)
+    assert (settings.gemini_model, settings.max_diff_chars) == (
+        "gemini-2.5-flash",
+        12000,
+    )
+
+
+def test_ai_settings_overrides():
+    env = {
+        "MERGEGUARD_GEMINI_MODEL": "gemini-2.5-pro",
+        "MERGEGUARD_MAX_DIFF_CHARS": "4000",
+    }
+    settings = Settings.from_env(env)
+    assert (settings.gemini_model, settings.max_diff_chars) == ("gemini-2.5-pro", 4000)
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"MERGEGUARD_GEMINI_MODEL": "../tunedModels/x"},  # would change the URL path
+        {"MERGEGUARD_GEMINI_MODEL": "gemini-2.5-flash:generateContent?key=x"},
+        {"MERGEGUARD_GEMINI_MODEL": "Gemini"},
+        {"MERGEGUARD_GEMINI_MODEL": ""},
+        {"MERGEGUARD_MAX_DIFF_CHARS": "0"},
+        {"MERGEGUARD_MAX_DIFF_CHARS": "200001"},
+        {"MERGEGUARD_MAX_DIFF_CHARS": "lots"},
+    ],
+)
+def test_invalid_ai_settings_fail_closed(env):
+    with pytest.raises(ConfigError):
+        Settings.from_env(env)
 
 
 def test_settings_overrides():
@@ -100,6 +131,33 @@ def test_ssm_errors_fail_closed_and_are_retried_next_time():
         store.get()
     ssm.error = None
     assert store.get().github_token == TEST_GITHUB_TOKEN
+
+
+def test_gemini_key_is_loaded_separately_and_only_on_request():
+    ssm = FakeSsm()
+    store = SecretStore("/mergeguard", lambda: ssm)
+    store.get()
+    assert ssm.calls[0]["Names"] == [
+        "/mergeguard/github_token",
+        "/mergeguard/webhook_secret",
+    ]
+    assert store.gemini_api_key() == TEST_GEMINI_KEY
+    assert store.gemini_api_key() == TEST_GEMINI_KEY  # cached
+    assert [call["Names"] for call in ssm.calls[1:]] == [["/mergeguard/gemini_api_key"]]
+    assert ssm.calls[1]["WithDecryption"] is True
+
+
+def test_missing_gemini_key_fails_only_the_key_lookup():
+    ssm = FakeSsm(
+        {
+            "/mergeguard/github_token": TEST_GITHUB_TOKEN,
+            "/mergeguard/webhook_secret": TEST_WEBHOOK_SECRET,
+        }
+    )
+    store = SecretStore("/mergeguard", lambda: ssm)
+    assert store.get().github_token == TEST_GITHUB_TOKEN  # the secret gate still works
+    with pytest.raises(ConfigError):
+        store.gemini_api_key()
 
 
 def test_secret_values_are_not_in_repr():

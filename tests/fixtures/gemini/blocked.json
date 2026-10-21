@@ -1,0 +1,6 @@
+{
+  "promptFeedback": {
+    "blockReason": "SAFETY"
+  },
+  "modelVersion": "gemini-2.5-flash"
+}

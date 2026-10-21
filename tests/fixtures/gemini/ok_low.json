@@ -1,0 +1,22 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "text": "{\"risk_level\": \"LOW\", \"bugs_found\": 0, \"summary\": \"Small refactor with no issues.\", \"feedback_markdown\": \"- `src/app.py`: consider a docstring for the new helper.\"}"
+          }
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 812,
+    "candidatesTokenCount": 61,
+    "totalTokenCount": 873
+  },
+  "modelVersion": "gemini-2.5-flash"
+}

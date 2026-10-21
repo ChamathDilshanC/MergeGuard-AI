@@ -1,20 +1,29 @@
 """Runtime configuration: environment settings and cached SSM secrets (FR-011)."""
 
+import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 DEFAULT_PARAM_PREFIX = "/mergeguard"
 DEFAULT_MAX_FILES = 300
 GITHUB_MAX_FILES = 3000  # GitHub's limit for the pull request files API
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_MAX_DIFF_CHARS = 12_000  # from the brief
+MAX_DIFF_CHARS_LIMIT = 200_000
 SECRET_TTL_SECONDS = 900.0  # 15 minutes, so rotations apply without a redeploy
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
-# gemini_api_key joins this list with the AI review (M3).
-SECRET_NAMES = ("github_token", "webhook_secret")
+# Needed for every delivery; loaded first and fail closed.
+CORE_SECRET_NAMES = ("github_token", "webhook_secret")
+# Loaded only when an AI review is actually requested, so a missing Gemini key
+# degrades to the AI-unavailable comment instead of blocking the secret gate.
+GEMINI_KEY_NAME = "gemini_api_key"
 
 _TRUE = frozenset({"1", "true", "yes"})
 _FALSE = frozenset({"0", "false", "no"})
+# The model ID becomes part of the Gemini URL path, so it is strictly validated.
+_MODEL_RE = re.compile(r"[a-z0-9][a-z0-9.-]{0,63}")
 
 
 class ConfigError(Exception):
@@ -29,6 +38,8 @@ class Settings:
     max_files: int
     log_level: str
     dry_run: bool
+    gemini_model: str = DEFAULT_GEMINI_MODEL
+    max_diff_chars: int = DEFAULT_MAX_DIFF_CHARS
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> "Settings":
@@ -38,11 +49,23 @@ class Settings:
         level = environ.get("MERGEGUARD_LOG_LEVEL", "INFO").upper()
         if level not in LOG_LEVELS:
             raise ConfigError(f"MERGEGUARD_LOG_LEVEL must be one of {LOG_LEVELS}")
+        model = environ.get("MERGEGUARD_GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+        if not _MODEL_RE.fullmatch(model):
+            raise ConfigError("MERGEGUARD_GEMINI_MODEL is not a valid model ID")
         return cls(
             param_prefix=prefix,
-            max_files=_int_setting(environ, "MERGEGUARD_MAX_FILES", DEFAULT_MAX_FILES),
+            max_files=_int_setting(
+                environ, "MERGEGUARD_MAX_FILES", DEFAULT_MAX_FILES, GITHUB_MAX_FILES
+            ),
             log_level=level,
             dry_run=_bool_setting(environ, "MERGEGUARD_DRY_RUN"),
+            gemini_model=model,
+            max_diff_chars=_int_setting(
+                environ,
+                "MERGEGUARD_MAX_DIFF_CHARS",
+                DEFAULT_MAX_DIFF_CHARS,
+                MAX_DIFF_CHARS_LIMIT,
+            ),
         )
 
 
@@ -67,8 +90,9 @@ def _default_ssm_client() -> SsmClient:
 
 
 class SecretStore:
-    """Loads the secrets with one ``GetParameters`` call and caches them per
-    execution environment for ``ttl_seconds``. Any problem fails closed."""
+    """Loads secrets from SSM and caches them per execution environment for
+    ``ttl_seconds``. The core secrets and the Gemini key are separate
+    ``GetParameters`` calls; any problem raises ConfigError."""
 
     def __init__(
         self,
@@ -83,22 +107,33 @@ class SecretStore:
         self._client: SsmClient | None = None
         self._ttl_seconds = ttl_seconds
         self._clock = clock
-        self._cached: Secrets | None = None
-        self._loaded_at = 0.0
+        self._cache: dict[tuple[str, ...], tuple[float, dict[str, str]]] = {}
 
     def get(self) -> Secrets:
-        now = self._clock()
-        if self._cached is None or now - self._loaded_at >= self._ttl_seconds:
-            self._cached = self._load()
-            self._loaded_at = now
-        return self._cached
+        """The secrets every delivery needs (FR-011). Fails closed."""
+        return Secrets(**self._values(CORE_SECRET_NAMES))
 
-    def _load(self) -> Secrets:
-        names = [f"{self.prefix}/{name}" for name in SECRET_NAMES]
+    def gemini_api_key(self) -> str:
+        """The Gemini key, read only when an AI review is requested (M3)."""
+        return self._values((GEMINI_KEY_NAME,))[GEMINI_KEY_NAME]
+
+    def _values(self, names: Sequence[str]) -> dict[str, str]:
+        key = tuple(names)
+        now = self._clock()
+        cached = self._cache.get(key)
+        if cached is None or now - cached[0] >= self._ttl_seconds:
+            cached = (now, self._load(key))
+            self._cache[key] = cached
+        return cached[1]
+
+    def _load(self, names: tuple[str, ...]) -> dict[str, str]:
+        full_names = [f"{self.prefix}/{name}" for name in names]
         try:
             if self._client is None:
                 self._client = self._client_factory()
-            response = self._client.get_parameters(Names=names, WithDecryption=True)
+            response = self._client.get_parameters(
+                Names=full_names, WithDecryption=True
+            )
         except Exception as exc:
             raise ConfigError("could not read parameters from SSM") from exc
         invalid = response.get("InvalidParameters") or []
@@ -109,15 +144,17 @@ class SecretStore:
             for item in response.get("Parameters") or []
         }
         resolved: dict[str, str] = {}
-        for name, full_name in zip(SECRET_NAMES, names, strict=True):
+        for name, full_name in zip(names, full_names, strict=True):
             value = values.get(full_name)
             if not isinstance(value, str) or not value:
                 raise ConfigError(f"SSM parameter {full_name} is missing or empty")
             resolved[name] = value
-        return Secrets(**resolved)
+        return resolved
 
 
-def _int_setting(environ: Mapping[str, str], name: str, default: int) -> int:
+def _int_setting(
+    environ: Mapping[str, str], name: str, default: int, maximum: int
+) -> int:
     raw = environ.get(name)
     if raw is None:
         return default
@@ -125,8 +162,8 @@ def _int_setting(environ: Mapping[str, str], name: str, default: int) -> int:
         value = int(raw)
     except ValueError as exc:
         raise ConfigError(f"{name} must be an integer") from exc
-    if not 1 <= value <= GITHUB_MAX_FILES:
-        raise ConfigError(f"{name} must be between 1 and {GITHUB_MAX_FILES}")
+    if not 1 <= value <= maximum:
+        raise ConfigError(f"{name} must be between 1 and {maximum}")
     return value
 
 

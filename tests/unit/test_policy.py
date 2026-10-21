@@ -5,7 +5,7 @@ import itertools
 import pytest
 
 from mergeguard.models import AIReview, SecretFinding
-from mergeguard.policy import ReviewEvent, Template, decide
+from mergeguard.policy import COMMENT_ONLY_RISK_LEVELS, ReviewEvent, Template, decide
 
 FINDING = SecretFinding("aws-access-key-id", "a.py", 1)
 
@@ -59,7 +59,8 @@ COMMENT, REQUEST_CHANGES = ReviewEvent.COMMENT, ReviewEvent.REQUEST_CHANGES
             (REQUEST_CHANGES, Template.AI_REVIEW, "risk_or_bugs"),
         ),
         ([], None, "timeout", True, (COMMENT, Template.AI_UNAVAILABLE, "timeout")),
-        ([], None, None, True, (None, None, "ai_not_enabled")),
+        # No review and no reason: still a comment, never silence or approval.
+        ([], None, None, True, (COMMENT, Template.AI_UNAVAILABLE, "unavailable")),
     ],
     ids=[
         "no-patches",
@@ -70,12 +71,22 @@ COMMENT, REQUEST_CHANGES = ReviewEvent.COMMENT, ReviewEvent.REQUEST_CHANGES
         "ai-medium",
         "ai-high",
         "ai-unavailable",
-        "m2-no-ai",
+        "no-ai-result",
     ],
 )
 def test_policy_table(findings, ai, failure, patches, expected):
     decision = decide(findings, ai, ai_failure=failure, has_patches=patches)
     assert (decision.event, decision.template, decision.reason) == expected
+
+
+def test_oq04_default_threshold_only_low_risk_is_a_plain_comment():
+    assert COMMENT_ONLY_RISK_LEVELS == {"LOW"}
+
+
+@pytest.mark.parametrize("failure", ["timeout", "invalid_output", "blocked", "auth"])
+def test_ai_failures_never_block_or_approve(failure):
+    decision = decide([], None, ai_failure=failure)
+    assert (decision.event, decision.template) == (COMMENT, Template.AI_UNAVAILABLE)
 
 
 def test_st09_policy_never_approves():

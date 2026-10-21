@@ -116,7 +116,7 @@ def test_non_retryable_errors_fail_after_one_call(status):
         json_response(500, {}),
         json_response(429, {}),
         json_response(403, {}, {"x-ratelimit-remaining": "0"}),
-        TransportError("TimeoutError"),
+        TransportError("timeout"),
     ],
 )
 def test_get_is_retried_once_after_a_short_delay(first):
@@ -142,7 +142,7 @@ def test_no_retry_when_the_lambda_is_out_of_time():
 
 
 def test_transport_failure_after_retry_has_no_status():
-    transport = FakeTransport().route("GET", FILES, TransportError("TimeoutError"))
+    transport = FakeTransport().route("GET", FILES, TransportError("timeout"))
     with pytest.raises(GitHubError) as caught:
         client(transport)[0].list_pull_files("owner/repo", 7, 300)
     assert (caught.value.kind, caught.value.status) == ("unavailable", None)

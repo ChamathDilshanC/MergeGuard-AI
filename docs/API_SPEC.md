@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — inbound contract (§2) and GitHub/SSM calls (§3, §5) implemented in M2 and tested; Gemini (§4) arrives in M3; **nothing is deployed yet** |
+| Status | Draft v0.1 — inbound contract (§2), GitHub and SSM calls (§3, §5) implemented in M2; Gemini (§4) implemented in M3 and tested only against mocked responses; **nothing is deployed yet** |
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) · [AI system](AI_SYSTEM.md) · [Security](SECURITY.md) |
 
@@ -61,7 +61,6 @@ Only these fields of the GitHub `pull_request` event payload are read. Everythin
 | Event other than `pull_request` | `200` | `ignored` | `event_not_supported` |
 | Action not in allow-list, or draft PR | `200` | `ignored` | `action_not_supported`, `draft` |
 | No file with a patch | `200` | `skipped` | `no_patches` |
-| Secret scan clean, no AI reviewer yet (M2 builds only; replaced by the AI review in M3) | `200` | `skipped` | `ai_not_enabled` |
 | Review already exists for this head SHA | `200` | `duplicate` | — |
 | Review posted (Phase 1, synchronous) | `200` | `reviewed` | `REQUEST_CHANGES`, `COMMENT` |
 | Dry run completed | `200` | `dry_run` | decision value |
@@ -152,14 +151,15 @@ Content-Type: application/json
 
 ## 4. Outbound — Google Gemini API
 
-**Status:** Planned (brief), with the key moved into a header (RB-07).
+**Status:** Implemented in M3, with the key moved into a header (RB-07). Tested only against mocked responses; no real call has been made yet (OQ-05).
 
 | Item | Value |
 | --- | --- |
 | Method and URL | `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` |
 | `{model}` | `MERGEGUARD_GEMINI_MODEL`, default `gemini-2.5-flash` |
 | Auth header | `x-goog-api-key: <gemini_api_key from SSM>` — never in the query string |
-| Timeout | Derived from the remaining Lambda time, reserving ≥ 5 s for posting |
+| Timeout | Derived from the remaining Lambda time, reserving ≥ 5 s for posting; at most 20 s; no call if less than 3 s would remain |
+| Tools / function calling | None; the request has no `tools` field |
 
 **Request body (shape):**
 
@@ -179,21 +179,23 @@ Content-Type: application/json
 
 1. If `promptFeedback.blockReason` is present, or there are no `candidates`, treat it as `blocked`.
 2. If `candidates[0].finishReason` is not `STOP`, treat it as `incomplete`.
-3. Parse `candidates[0].content.parts[0].text` as JSON and validate it against [AI_SYSTEM.md](AI_SYSTEM.md) §5.
+3. Join the `text` of `candidates[0].content.parts` (parts marked `thought` are skipped), parse it as JSON and validate it against [AI_SYSTEM.md](AI_SYSTEM.md) §5.
 4. Any failure produces the AI-unavailable path (FR-008). The raw text is never logged.
 
 | Gemini response | MergeGuard behaviour |
 | --- | --- |
-| `400` | Log `ai.failed` reason `bad_request` (often an invalid model ID) |
+| `400` / `404` | Log `ai.failed` reason `bad_request` (often an invalid model ID) |
 | `401` / `403` | Log `ai.failed` reason `auth` |
 | `429` | Log `ai.failed` reason `rate_limited` |
-| `5xx` or timeout | Log `ai.failed` reason `unavailable` |
+| `5xx` or network failure | Log `ai.failed` reason `unavailable` |
+| Timeout | Log `ai.failed` reason `timeout` |
 
 ## 5. Outbound — AWS SSM Parameter Store
 
 | Call | Parameters | Notes |
 | --- | --- | --- |
-| `GetParameters` | `Names = [<prefix>/github_token, <prefix>/webhook_secret, <prefix>/gemini_api_key]`, `WithDecryption = true` | One call per cold start or 15-minute TTL expiry. Any entry in `InvalidParameters`, or an empty value, means fail closed. M2 requests only the first two names; `gemini_api_key` is added with M3 |
+| `GetParameters` (core) | `Names = [<prefix>/github_token, <prefix>/webhook_secret]`, `WithDecryption = true` | One call per cold start or 15-minute TTL expiry. Any entry in `InvalidParameters`, or an empty value, means fail closed (`500`) |
+| `GetParameters` (Gemini key) | `Names = [<prefix>/gemini_api_key]`, `WithDecryption = true` | Only when an AI review runs; cached the same way. A missing or empty key gives the AI-unavailable comment with reason `not_configured`, not a `500` |
 
 ## 6. Internal — queue message (Phase 2)
 

@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — design for implementation; **no AI integration exists yet** |
+| Status | Draft v0.1 — implemented in M3 (`prompts.py`, `ai_reviewer.py`) and tested with mocked responses only; **no real Gemini call has been made** (tier undecided, OQ-05) |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) FR-007, FR-008 · [API spec](API_SPEC.md) §4 · [Security](SECURITY.md) TM-03, TM-04 |
 
@@ -20,9 +20,9 @@ AI is **advisory**. The Gemini model produces a first-pass review: a risk level,
 | --- | --- | --- |
 | Provider | Google Gemini API (Generative Language API, `v1beta`) | Planned (brief) |
 | Default model | `gemini-2.5-flash` | Planned (brief) |
-| Configuration | `MERGEGUARD_GEMINI_MODEL` (Terraform variable `gemini_model`) | Proposed |
-| Client | Hand-written `urllib.request` client, no SDK ([ADR-0002](ADR/0002-zero-runtime-dependencies.md)) | Planned (brief) |
-| Authentication | `x-goog-api-key` header, key from SSM | Proposed (fixes RB-07) |
+| Configuration | `MERGEGUARD_GEMINI_MODEL` (Terraform variable `gemini_model`); validated as a model ID because it becomes part of the URL path | Verified (M3) |
+| Client | Hand-written `urllib.request` client, no SDK ([ADR-0002](ADR/0002-zero-runtime-dependencies.md)) | Verified (M3) |
+| Authentication | `x-goog-api-key` header, key from SSM | Verified (M3; fixes RB-07) |
 
 Model availability and names change over time. Confirm that the configured model is still offered before each release (§11).
 
@@ -44,9 +44,11 @@ Model availability and names change over time. Confirm that the configured model
 
 MergeGuard stores no prompts or responses.
 
+**The Gemini key itself** is read from SSM only when an AI review actually runs, in its own `GetParameters` call. Ignored events, duplicates and secret-positive diffs never load it. A missing key degrades to the AI-unavailable comment (`not_configured`) instead of failing the webhook, so the secret gate keeps working.
+
 ## 4. Prompt architecture
 
-The prompt is versioned in `src/mergeguard/prompts.py` (Proposed) as `PROMPT_VERSION = "review-v1"`, which is logged with every call. It has two parts:
+The prompt is versioned in `src/mergeguard/prompts.py` (M3) as `PROMPT_VERSION = "review-v1"`, which is logged with every call. It has two parts:
 
 **System instruction** (draft):
 
@@ -86,7 +88,11 @@ Review the pull-request diff between the two boundary markers.
 <<<END_MERGEGUARD_DIFF_{random-hex}>>>
 ````
 
-The brief put instructions and diff in a single prompt string. Separating them into `systemInstruction` and `contents` is Proposed.
+The brief put instructions and diff in a single prompt string. M3 separates them into `systemInstruction` and `contents`, and adds three more defences:
+
+- **Boundary:** 32 hex characters from `secrets.token_hex(16)`, redrawn if the diff happens to contain it.
+- **File names:** control characters, including newlines, are replaced so a crafted file name cannot start a new prompt line.
+- **Code fence:** each file's fence is longer than any backtick run in its patch.
 
 ## 5. Output contract
 
@@ -129,7 +135,9 @@ The brief defaulted a missing `risk_level` to `MEDIUM`, which would request chan
 | `maxOutputTokens` | Set during evaluation, with headroom for any thinking tokens | Avoid truncated JSON |
 | Diff budget | `MERGEGUARD_MAX_DIFF_CHARS = 12000` (brief) | Roughly 3–4k input tokens; cost and latency control |
 
-**Truncation algorithm:** add whole files in API order until the next file would exceed the budget. If the first file alone exceeds it, include its first hunks up to the budget. Record omitted files for the `N-PARTIAL-DIFF` notice. Truncation applies only to the AI input; the secret scan covers every retrieved patch.
+M3 sets `temperature`, `responseMimeType` and `responseSchema`. The thinking budget and `maxOutputTokens` stay at the API defaults until the evaluation (T-304) can tune them.
+
+**Truncation algorithm** (implemented in `build_diff_bundle`): add whole files in API order until the next file would exceed the budget. If the first file alone exceeds it, include its first hunks up to the budget, or its first lines if even one hunk is too big. Record omitted files for the `N-PARTIAL-DIFF` notice; a partly sent file is listed too. A section must contain at least one diff line. If nothing fits at all, the review fails safe with reason `diff_too_large`. Truncation applies only to the AI input; the secret scan covers every retrieved patch.
 
 ## 7. Safety and abuse resistance
 
@@ -149,7 +157,12 @@ The brief defaulted a missing `risk_level` to `MEDIUM`, which would request chan
 | Timeout | `urllib` timeout / deadline budget | `T-AIU`, reason `timeout` |
 | HTTP `429` | Status code | `T-AIU`, reason `rate_limited` |
 | HTTP `5xx` | Status code | `T-AIU`, reason `unavailable` |
-| HTTP `400` / `401` / `403` | Status code | `T-AIU`, reason `bad_request` or `auth`; operator alert in Phase 2 |
+| HTTP `400` / `404` (for example an unknown model) | Status code | `T-AIU`, reason `bad_request`; operator alert in Phase 2 |
+| HTTP `401` / `403` | Status code | `T-AIU`, reason `auth` |
+| Network failure (DNS, TLS, connection) | Transport | `T-AIU`, reason `unavailable` |
+| Gemini key missing or empty in SSM | Config | `T-AIU`, reason `not_configured`; Gemini is not called |
+| Less than 3 s left after reserving 5 s for posting | Deadline budget | `T-AIU`, reason `timeout`; Gemini is not called |
+| Not even part of the first file fits the diff budget | Diff bundling | `T-AIU`, reason `diff_too_large`; Gemini is not called |
 | Safety block / no candidates | `promptFeedback.blockReason`, empty `candidates` | `T-AIU`, reason `blocked` |
 | `finishReason` not `STOP` | Candidate field | `T-AIU`, reason `incomplete` |
 | Invalid JSON or schema mismatch | Parser / validator | `T-AIU`, reason `invalid_output` |
@@ -158,7 +171,7 @@ No AI failure ever results in `REQUEST_CHANGES`. Retrying is not automatic in Ph
 
 ## 9. Evaluation
 
-**Status:** Proposed (task T-304). This is an offline evaluation, run manually before changing the model, prompt, or generation settings.
+**Status:** Blocked (task T-304). It needs real Gemini calls, which wait for the tier decision (OQ-05). This is an offline evaluation, run manually before changing the model, prompt, or generation settings.
 
 - **Dataset:** `tests/ai_eval/cases/` — about 30 synthetic diffs, each labelled with an expected `risk_level` range and expected key findings. Categories:
   - clean refactor and docs-only change;

@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — webhook verification, secret loading, secret scanning, review sanitisation, log redaction and duplicate handling implemented and tested in M2; **not deployed**; IAM and abuse controls arrive with T-401 |
+| Status | Draft v0.1 — webhook verification, secret loading, secret scanning, review sanitisation, log redaction and duplicate handling implemented in M2; AI data handling and prompt-injection defences in M3 (mocked Gemini only); **not deployed**; IAM and abuse controls arrive with T-401 |
 | Last updated | 2026-10-21 |
 | Owner | [@ChamathDilshanC](https://github.com/ChamathDilshanC) |
 | Related | [Architecture](ARCHITECTURE.md) · [AI system](AI_SYSTEM.md) · [Deployment](DEPLOYMENT.md) |
@@ -119,6 +119,7 @@ Target inline policy for the Phase 1 execution role. ARNs are built in Terraform
 
 - Only the size-limited diff (file names and patch hunks) is sent. PR title, description, author, and repository metadata are **not** sent in Phase 1.
 - Nothing is sent when the secret scan finds anything.
+- The Gemini key is read from SSM only when an AI review runs. A missing key degrades to the AI-unavailable comment rather than a `500`, so the secret gate never depends on the AI provider.
 - The owner must check the current Gemini API terms for the chosen tier before reviewing proprietary code. Under Google's published terms, content sent to unpaid tiers may be used to improve Google's products. Tracked as [OQ-05](PRD.md#17-open-questions); see [AI_SYSTEM.md](AI_SYSTEM.md) §3.
 
 ### 5.6 Logging and redaction (FR-013)
