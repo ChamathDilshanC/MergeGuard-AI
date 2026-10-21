@@ -38,7 +38,7 @@ def test_terraform_creates_exactly_the_secrets_the_code_reads():
 
 
 def test_placeholder_is_recognised_by_the_code():
-    placeholder = re.search(r'secret_placeholder = "([^"]+)"', MAIN_TF).group(1)
+    placeholder = re.search(r'parameter_placeholder = "([^"]+)"', MAIN_TF).group(1)
     assert placeholder.startswith(config.PLACEHOLDER_PREFIX)
 
 

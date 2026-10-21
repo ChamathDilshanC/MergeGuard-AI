@@ -18,7 +18,7 @@ locals {
 
   # Public, non-secret value Terraform writes once (ADR-0007). The Lambda treats
   # any value with this prefix as "not set" (config.PLACEHOLDER_PREFIX).
-  secret_placeholder = "mergeguard-placeholder:set-with-aws-ssm-put-parameter"
+  parameter_placeholder = "mergeguard-placeholder:set-with-aws-ssm-put-parameter"
 }
 
 # --- SSM parameter placeholders (ADR-0007) -------------------------------------
@@ -33,7 +33,7 @@ resource "aws_ssm_parameter" "secret" {
 
   # Write-only: never stored in state or plan, and only re-sent when the version
   # changes, so real values set with the AWS CLI are never read into state.
-  value_wo         = local.secret_placeholder
+  value_wo         = local.parameter_placeholder
   value_wo_version = 1
 }
 
