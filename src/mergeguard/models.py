@@ -10,8 +10,8 @@ class PullRequestRef:
     repo: str  # "owner/name"
     number: int
     head_sha: str
-    author_login: str
-    draft: bool
+    author_login: str = ""  # not carried by queue messages (metadata only)
+    draft: bool = False
 
     @property
     def short_sha(self) -> str:
@@ -35,6 +35,17 @@ class SecretFinding:
     rule_id: str
     filename: str
     line: int
+
+
+@dataclass(frozen=True, slots=True)
+class SuppressedFinding:
+    """A scanner hit that an inline marker or the path allow-list suppressed
+    (FR-019). Listed in the review, and its line is withheld from the AI."""
+
+    rule_id: str
+    filename: str
+    line: int
+    via: str  # "inline" or "path"
 
 
 @dataclass(frozen=True, slots=True)

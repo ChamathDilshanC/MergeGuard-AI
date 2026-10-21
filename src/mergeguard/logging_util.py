@@ -30,6 +30,9 @@ ALLOWED_FIELDS = frozenset(
         "body_length",
         "error_type",
         "duration_ms",
+        "commit_state",
+        "suppressed",
+        "dismissed",
     }
 )
 LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}

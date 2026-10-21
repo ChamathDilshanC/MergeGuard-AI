@@ -74,6 +74,15 @@ jobs:
       - name: Plan tests with a mocked AWS provider (no credentials)
         run: terraform -chdir=terraform test
 
+      - name: Bootstrap stack - init without backend, using its lock file
+        run: terraform -chdir=terraform/bootstrap init -backend=false -input=false -lockfile=readonly
+
+      - name: Bootstrap stack - validate
+        run: terraform -chdir=terraform/bootstrap validate
+
+      - name: Bootstrap stack - plan tests with a mocked AWS provider (no credentials)
+        run: terraform -chdir=terraform/bootstrap test
+
       - name: Set up Python for checkov
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:

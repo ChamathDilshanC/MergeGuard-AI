@@ -224,3 +224,81 @@ def test_path_segments_are_url_quoted():
     assert transport.calls[0].url.startswith(
         "https://api.github.com/repos/my.org/repo_name-1/pulls/7/files?"
     )
+
+
+# --- Phase 2 calls: pull state, commit status, dismissal (M5) -------------------
+
+PULL = r"/repos/owner/repo/pulls/7$"
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_pull_state_reads_head_sha_and_state():
+    transport = FakeTransport().route(
+        "GET", PULL, json_response(200, {"state": "open", "head": {"sha": SHA}})
+    )
+    state = client(transport)[0].pull_state("owner/repo", 7)
+    assert (state.head_sha, state.state) == (SHA, "open")
+    assert transport.calls[0].url == "https://api.github.com/repos/owner/repo/pulls/7"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        [],
+        {},
+        {"state": "open"},
+        {"head": {"sha": SHA}},
+        {"state": 1, "head": {"sha": SHA}},
+    ],
+)
+def test_pull_state_rejects_unexpected_bodies(data):
+    transport = FakeTransport().route("GET", PULL, json_response(200, data))
+    with pytest.raises(GitHubError) as raised:
+        client(transport)[0].pull_state("owner/repo", 7)
+    assert raised.value.kind == "unexpected"
+
+
+def test_create_status_posts_the_documented_body():
+    transport = FakeTransport().route("POST", r"/statuses/", json_response(201, {}))
+    client(transport)[0].create_status(
+        "owner/repo", SHA, state="failure", description="x" * 200
+    )
+    [call] = transport.calls
+    assert call.url == f"https://api.github.com/repos/owner/repo/statuses/{SHA}"
+    assert call.json() == {
+        "state": "failure",
+        "context": "mergeguard/review",
+        "description": "x" * 140,  # GitHub's limit
+    }
+
+
+def test_create_status_refuses_unknown_states():
+    with pytest.raises(ValueError, match="not allowed"):
+        client(FakeTransport())[0].create_status(
+            "owner/repo", SHA, state="approved", description="x"
+        )
+
+
+def test_dismiss_review_puts_a_dismiss_event():
+    transport = FakeTransport().route("PUT", r"/dismissals$", json_response(200, {}))
+    client(transport)[0].dismiss_review("owner/repo", 7, 99, "superseded")
+    [call] = transport.calls
+    assert call.method == "PUT"
+    assert call.url == (
+        "https://api.github.com/repos/owner/repo/pulls/7/reviews/99/dismissals"
+    )
+    assert call.json() == {"message": "superseded", "event": "DISMISS"}
+
+
+def test_writes_are_not_retried_after_a_server_error():
+    """A PUT or POST that got a 5xx may already have been applied."""
+    for method, route in (("PUT", r"/dismissals$"), ("POST", r"/statuses/")):
+        transport = FakeTransport().route(method, route, json_response(502, {}))
+        github, sleeps = client(transport)
+        with pytest.raises(GitHubError) as raised:
+            if method == "PUT":
+                github.dismiss_review("owner/repo", 7, 1, "m")
+            else:
+                github.create_status("owner/repo", SHA, state="error", description="d")
+        assert raised.value.kind == "unavailable"
+        assert len(transport.calls) == 1 and sleeps == []

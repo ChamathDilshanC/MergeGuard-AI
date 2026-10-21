@@ -1,5 +1,6 @@
 # Variables from docs/DEPLOYMENT.md section 4. Defaults reproduce the project brief.
-# Declared in T-103 and used by main.tf since T-401.
+# Declared in T-103 and used by main.tf since T-401; the Phase 2 variables (queue,
+# worker, commit status, suppressions, alerts) were added in M5.
 
 variable "aws_region" {
   description = "AWS region to deploy into."
@@ -8,13 +9,13 @@ variable "aws_region" {
 }
 
 variable "function_name" {
-  description = "Lambda function name; also determines the CloudWatch log group name."
+  description = "Name of the receiver Lambda (API Gateway target); also determines its CloudWatch log group name."
   type        = string
   default     = "mergeguard-ai-pr-reviewer"
 }
 
 variable "lambda_timeout_seconds" {
-  description = "Lambda timeout. Must stay at or below 30 while API Gateway invokes synchronously."
+  description = "Receiver Lambda timeout. Must stay at or below 30: API Gateway HTTP APIs cap integrations at 30 s."
   type        = number
   default     = 30
 
@@ -25,7 +26,7 @@ variable "lambda_timeout_seconds" {
 }
 
 variable "lambda_memory_mb" {
-  description = "Lambda memory size in MB."
+  description = "Receiver Lambda memory size in MB."
   type        = number
   default     = 256
 
@@ -115,12 +116,114 @@ variable "throttling_burst_limit" {
 }
 
 variable "reserved_concurrency" {
-  description = "Optional Lambda reserved concurrency cap. Null leaves the function unreserved."
+  description = "Optional reserved concurrency cap for the receiver Lambda. Null leaves it unreserved."
   type        = number
   default     = null
 
   validation {
     condition     = var.reserved_concurrency == null ? true : var.reserved_concurrency >= 0
     error_message = "reserved_concurrency must be null or a non-negative number."
+  }
+}
+
+# --- Phase 2 (M5) ------------------------------------------------------------------
+
+variable "worker_function_name" {
+  description = "Name of the SQS worker Lambda; also determines its CloudWatch log group name."
+  type        = string
+  default     = "mergeguard-ai-pr-worker"
+}
+
+variable "worker_timeout_seconds" {
+  description = "Worker Lambda timeout. It can exceed 30 s because API Gateway no longer waits for it (ADR-0005). The queue's visibility timeout is six times this value."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.worker_timeout_seconds >= 10 && var.worker_timeout_seconds <= 900
+    error_message = "worker_timeout_seconds must be between 10 and 900 (the Lambda maximum)."
+  }
+}
+
+variable "worker_memory_mb" {
+  description = "Worker Lambda memory size in MB."
+  type        = number
+  default     = 256
+
+  validation {
+    condition     = var.worker_memory_mb >= 128 && var.worker_memory_mb <= 10240
+    error_message = "worker_memory_mb must be between 128 and 10240."
+  }
+}
+
+variable "worker_max_concurrency" {
+  description = "Maximum concurrent worker invocations (event source mapping scaling). Caps Gemini and GitHub traffic without needing reserved concurrency (SECURITY.md TM-08, TM-13)."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.worker_max_concurrency >= 2 && var.worker_max_concurrency <= 1000
+    error_message = "worker_max_concurrency must be between 2 (the minimum Lambda accepts) and 1000."
+  }
+}
+
+variable "queue_max_receive_count" {
+  description = "How many times SQS hands a review request to the worker before it moves to the dead-letter queue."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.queue_max_receive_count >= 1 && var.queue_max_receive_count <= 10
+    error_message = "queue_max_receive_count must be between 1 and 10."
+  }
+}
+
+variable "commit_status_enabled" {
+  description = "Set the mergeguard/review commit status (MERGEGUARD_COMMIT_STATUS). The GitHub token then needs the Commit statuses: Read and write permission (DEPLOYMENT.md section 3.1)."
+  type        = bool
+  default     = true
+}
+
+variable "scan_allow_paths" {
+  description = "Path globs whose secret-scan findings are suppressed and listed in the review (MERGEGUARD_SCAN_ALLOW_PATHS, FR-019), for example tests/fixtures/**. Operator-defined: a pull request cannot change it."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for pattern in var.scan_allow_paths :
+      can(regex("^[A-Za-z0-9_./*?@+=~ -]{1,200}$", pattern))
+      && !startswith(pattern, "/")
+      && !strcontains(pattern, "..")
+      && trim(pattern, "*?/") != ""
+    ])
+    error_message = "Each scan_allow_paths entry must be a relative path glob of at most 200 characters, without commas or '..', and must name a path (a bare wildcard would switch the scanner off)."
+  }
+
+  validation {
+    condition     = length(var.scan_allow_paths) <= 50
+    error_message = "scan_allow_paths allows at most 50 patterns."
+  }
+}
+
+variable "alert_email" {
+  description = "Email address that receives alarm and budget notifications. Null creates the alarms without a subscriber. The subscription must be confirmed from the email AWS sends."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.alert_email == null ? true : can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email))
+    error_message = "alert_email must be an email address or null."
+  }
+}
+
+variable "monthly_budget_usd" {
+  description = "Monthly AWS cost budget in USD (NFR-007). Null creates no budget: the amount is the owner's decision (OQ-05). Requires alert_email."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.monthly_budget_usd == null ? true : var.monthly_budget_usd > 0
+    error_message = "monthly_budget_usd must be null or positive."
   }
 }

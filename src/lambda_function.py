@@ -3,6 +3,11 @@
 Translates the API Gateway payload v2.0 event into a pipeline call and the
 result into an HTTP response (docs/API_SPEC.md section 2.3). No review logic
 lives here.
+
+With ``MERGEGUARD_QUEUE_URL`` set this is the Phase 2 receiver (FR-016): it
+verifies the signature, filters the event, queues a metadata-only message and
+answers ``202``. The SQS worker in ``worker_function`` does the review. Without
+it the review runs inline (Phase 1), which tests and local runs rely on.
 """
 
 import json
@@ -12,12 +17,13 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
-from mergeguard.ai_reviewer import GeminiReviewer
 from mergeguard.config import ConfigError, SecretStore, Settings
-from mergeguard.github_client import GitHubClient, GitHubError
+from mergeguard.github_client import GitHubError
 from mergeguard.http import Transport, urllib_transport
 from mergeguard.logging_util import JsonLogger
-from mergeguard.pipeline import Outcome, ReviewPipeline
+from mergeguard.pipeline import Outcome
+from mergeguard.review_queue import QueueError, ReviewQueue
+from mergeguard.runtime import build_pipeline
 from mergeguard.webhook import (
     InvalidBody,
     MalformedPayload,
@@ -27,13 +33,11 @@ from mergeguard.webhook import (
     verify_signature,
 )
 
-# Seconds kept free after a GitHub retry so the response is still returned.
-TIME_SAFETY_MARGIN_SECONDS = 2.0
-
 _DELIVERY_ID_RE = re.compile(r"[0-9A-Za-z-]{1,64}")
 _EVENT_NAME_RE = re.compile(r"[a-z_]{1,40}")
 
 _secret_store: SecretStore | None = None
+_review_queue: ReviewQueue | None = None
 
 
 def lambda_handler(event: Mapping[str, Any], context: Any) -> dict[str, Any]:
@@ -43,6 +47,7 @@ def lambda_handler(event: Mapping[str, Any], context: Any) -> dict[str, Any]:
         environ=os.environ,
         secrets=_cached_secret_store,
         transport=urllib_transport,
+        queue=_cached_review_queue,
     )
 
 
@@ -55,6 +60,13 @@ def _cached_secret_store(prefix: str) -> SecretStore:
     return _secret_store
 
 
+def _cached_review_queue(url: str) -> ReviewQueue:
+    global _review_queue
+    if _review_queue is None or _review_queue.url != url:
+        _review_queue = ReviewQueue(url)
+    return _review_queue
+
+
 def handle(
     event: Mapping[str, Any],
     context: Any,
@@ -62,6 +74,7 @@ def handle(
     environ: Mapping[str, str],
     secrets: Callable[[str], SecretStore],
     transport: Transport,
+    queue: Callable[[str], ReviewQueue] | None = None,
     stream: TextIO | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
@@ -76,10 +89,22 @@ def handle(
         log = JsonLogger(settings.log_level, stream, delivery_id=delivery_id)
         log.log("webhook.received", github_event=event_name)
         outcome = _process(
-            event, context, headers, event_name, settings, secrets, transport, log
+            event,
+            context,
+            headers,
+            event_name,
+            delivery_id,
+            settings,
+            secrets,
+            transport,
+            queue,
+            log,
         )
     except ConfigError:
         log.log("config.failed", "ERROR")
+        outcome = Outcome(500, "error", "internal")
+    except QueueError:
+        log.log("queue.failed", "ERROR")
         outcome = Outcome(500, "error", "internal")
     except GitHubError as exc:
         log.log(f"github.{exc.kind}", "ERROR", http_status=exc.status)
@@ -102,17 +127,30 @@ def _process(
     context: Any,
     headers: Mapping[str, str],
     event_name: str,
+    delivery_id: str,
     settings: Settings,
     secrets: Callable[[str], SecretStore],
     transport: Transport,
+    queue: Callable[[str], ReviewQueue] | None,
     log: JsonLogger,
 ) -> Outcome:
     store = secrets(settings.param_prefix)
-    credentials = store.get()  # fails closed (FR-011)
+    receiver_queue = None
+    credentials = None
+    if settings.queue_url is not None:
+        if queue is None:
+            raise ConfigError("MERGEGUARD_QUEUE_URL is set but no queue is wired")
+        receiver_queue = queue(settings.queue_url)
+        # The receiver reads only the webhook secret; the token stays with the
+        # worker (least privilege, SECURITY.md section 5.3). Fails closed.
+        webhook_secret = store.webhook_secret()
+    else:
+        credentials = store.get()  # fails closed (FR-011)
+        webhook_secret = credentials.webhook_secret
     try:
         body = raw_body(event)
         authentic = verify_signature(
-            credentials.webhook_secret, body, headers.get("x-hub-signature-256")
+            webhook_secret, body, headers.get("x-hub-signature-256")
         )
     except InvalidBody:
         authentic = False
@@ -135,42 +173,20 @@ def _process(
     pr_log = log.bind(
         repo=pr.repo, pr=pr.number, head_sha=pr.short_sha, action=triaged.action
     )
-    seconds_left = _seconds_left(context)
-    github = GitHubClient(
-        credentials.github_token, transport, has_time=_time_budget(seconds_left)
-    )
-    reviewer = GeminiReviewer(
-        store.gemini_api_key,  # read from SSM only when an AI review runs
-        transport,
-        model=settings.gemini_model,
-        max_diff_chars=settings.max_diff_chars,
-        time_left=seconds_left,
-    )
-    pipeline = ReviewPipeline(
-        github,
-        reviewer,
-        pr_log,
-        max_files=settings.max_files,
-        dry_run=settings.dry_run,
+    if receiver_queue is not None:
+        receiver_queue.enqueue(delivery_id, triaged.action or "", pr)
+        pr_log.log("queue.enqueued")
+        return Outcome(202, "accepted")
+    pipeline = build_pipeline(
+        settings,
+        github_token=(credentials or store.get()).github_token,
+        gemini_api_key=store.gemini_api_key,
+        transport=transport,
+        context=context,
+        logger=pr_log,
+        verify_head=False,
     )
     return pipeline.run(pr)
-
-
-def _seconds_left(context: Any) -> Callable[[], float | None]:
-    remaining = getattr(context, "get_remaining_time_in_millis", None)
-
-    def seconds_left() -> float | None:
-        return None if remaining is None else remaining() / 1000
-
-    return seconds_left
-
-
-def _time_budget(seconds_left: Callable[[], float | None]) -> Callable[[float], bool]:
-    def has_time(seconds: float) -> bool:
-        left = seconds_left()
-        return left is None or left > seconds + TIME_SAFETY_MARGIN_SECONDS
-
-    return has_time
 
 
 def _safe(value: str, pattern: re.Pattern[str]) -> str:

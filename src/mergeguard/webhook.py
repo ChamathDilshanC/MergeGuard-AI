@@ -101,13 +101,9 @@ def parse_pull_request(payload: Mapping[str, Any]) -> PullRequestRef:
     login = _object(pr.get("user")).get("login")
     draft = pr.get("draft", False)
     valid = (
-        isinstance(repo, str)
-        and _REPO_RE.fullmatch(repo) is not None
-        and not any(part in (".", "..") for part in repo.split("/"))
-        and type(number) is int
-        and number > 0
-        and isinstance(head_sha, str)
-        and _SHA_RE.fullmatch(head_sha) is not None
+        is_valid_repo(repo)
+        and is_valid_pull_number(number)
+        and is_valid_sha(head_sha)
         and isinstance(draft, bool)
     )
     if not valid:
@@ -119,6 +115,23 @@ def parse_pull_request(payload: Mapping[str, Any]) -> PullRequestRef:
         author_login=login if isinstance(login, str) else "",
         draft=draft,
     )
+
+
+def is_valid_repo(value: object) -> bool:
+    """``owner/name`` with no path tricks; it becomes part of API URLs."""
+    return (
+        isinstance(value, str)
+        and _REPO_RE.fullmatch(value) is not None
+        and not any(part in (".", "..") for part in value.split("/"))
+    )
+
+
+def is_valid_pull_number(value: object) -> bool:
+    return type(value) is int and value > 0
+
+
+def is_valid_sha(value: object) -> bool:
+    return isinstance(value, str) and _SHA_RE.fullmatch(value) is not None
 
 
 def _parse_object(body: bytes) -> dict[str, Any]:

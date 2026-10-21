@@ -5,9 +5,6 @@ Covers T-201, T-207 to T-210, T-301 to T-303 and the security tests ST-02 to
 ST-06 and ST-08 at the HTTP boundary (docs/TESTING_STRATEGY.md sections 6, 8).
 """
 
-import io
-import json
-
 import pytest
 
 import lambda_function
@@ -16,6 +13,7 @@ from mergeguard.http import TransportError
 from mergeguard.logging_util import ALLOWED_FIELDS
 from mergeguard.prompts import SYSTEM_INSTRUCTION
 from mergeguard.render import FALLBACK_CALLOUT, MARKER_PREFIX
+from mergeguard.runtime import seconds_left, time_budget
 from support import (
     AWS_EXAMPLE_KEY_ID,
     BOT_LOGIN,
@@ -26,6 +24,7 @@ from support import (
     TEST_WEBHOOK_SECRET,
     FakeSsm,
     FakeTransport,
+    Harness,
     api_event,
     file_entry,
     gemini_response,
@@ -40,33 +39,6 @@ from support import (
 LEAKY_PATCH = f"@@ -0,0 +1,2 @@\n+import os\n+AWS_KEY = '{AWS_EXAMPLE_KEY_ID}'"
 CLEAN_PATCH = "@@ -1 +1 @@\n-x = 1\n+x = 2"
 REVIEWS_POST = r"/pulls/7/reviews$"
-
-
-class Harness:
-    def __init__(self, transport: FakeTransport, env: dict | None = None, ssm=None):
-        self.transport = transport
-        self.env = env or {}
-        self.ssm = ssm or FakeSsm()
-        self.logs = io.StringIO()
-
-    def __call__(self, event: dict, context=None) -> tuple[int, dict]:
-        store = SecretStore("/mergeguard", lambda: self.ssm)
-        response = lambda_function.handle(
-            event,
-            context,
-            environ=self.env,
-            secrets=lambda prefix: store,
-            transport=self.transport,
-            stream=self.logs,
-        )
-        assert response["headers"] == {"Content-Type": "application/json"}
-        return response["statusCode"], json.loads(response["body"])
-
-    def records(self) -> list[dict]:
-        return [json.loads(line) for line in self.logs.getvalue().splitlines()]
-
-    def events(self) -> list[str]:
-        return [record["event"] for record in self.records()]
 
 
 def posted_reviews(transport: FakeTransport) -> list[dict]:
@@ -551,10 +523,10 @@ def test_time_budget_uses_the_lambda_deadline_when_available():
         def get_remaining_time_in_millis(self) -> int:
             return 15_000
 
-    budget = lambda_function._time_budget(lambda_function._seconds_left(Context()))
+    budget = time_budget(seconds_left(Context()))
     assert budget(11.0) is True
     assert budget(13.5) is False
-    no_context = lambda_function._time_budget(lambda_function._seconds_left(None))
+    no_context = time_budget(seconds_left(None))
     assert no_context(1_000.0) is True  # no context: allow
 
 

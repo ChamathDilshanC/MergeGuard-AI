@@ -8,7 +8,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from mergeguard.models import AIReview, SecretFinding
+from mergeguard.models import AIReview, SecretFinding, SuppressedFinding
 from mergeguard.policy import Decision, Template
 
 MARKER_PREFIX = "<!-- mergeguard:v1 "
@@ -31,6 +31,14 @@ RISK_VERDICTS = {
     "MEDIUM": "🟡 Medium risk",
     "HIGH": "🔴 High risk",
 }
+# Commit status (docs/DESIGN_SYSTEM.md section 5.6): (state, description).
+STATUS_PENDING = ("pending", "MergeGuard review in progress")
+STATUS_BLOCKED_SECRETS = ("failure", "Possible credentials found — see review")
+STATUS_BLOCKED_AI = ("failure", "Changes requested by AI review — see review")
+STATUS_CLEAR = ("success", "No blocking issues found")
+STATUS_ERROR = ("error", "MergeGuard could not complete the review")
+
+SUPPRESSION_VIA = {"inline": "inline marker", "path": "path allow-list"}
 FALLBACK_CALLOUT = (
     "> [!IMPORTANT]\n"
     "> Changes are requested. GitHub does not allow this bot identity to formally "
@@ -51,6 +59,7 @@ class Notices:
     omitted_files: tuple[str, ...] = ()
     files_cap: int | None = None  # N-PARTIAL-FILES
     no_patch_files: tuple[str, ...] = ()  # N-NO-PATCH
+    suppressed: tuple[SuppressedFinding, ...] = ()  # N-SUPPRESSED (FR-019)
 
 
 def render_review(
@@ -149,6 +158,14 @@ def render_ai_unavailable(reason: str, short_sha: str, *, notices: Notices) -> s
     return _finish(blocks)
 
 
+def dismissal_message(short_sha: str) -> str:
+    """Why an earlier blocking review was dismissed (FR-018); names the commit."""
+    return (
+        f"MergeGuard AI: superseded by the review of commit {short_sha}, which "
+        "found no blocking issues. See the latest MergeGuard review."
+    )
+
+
 def sanitize(text: str, limit: int) -> str:
     """Neutralise untrusted Markdown (docs/DESIGN_SYSTEM.md section 5.7)."""
     text = _MARKER_RE.sub("", text)
@@ -179,7 +196,26 @@ def _notice_blocks(notices: Notices) -> list[str]:
             "> [!NOTE]\n> Not reviewed (binary or too large): "
             f"{_file_list(notices.no_patch_files)}."
         )
+    if notices.suppressed:
+        blocks.append(_suppressed_notice(notices.suppressed))
     return blocks
+
+
+def _suppressed_notice(suppressed: Sequence[SuppressedFinding]) -> str:
+    """Every suppression is listed, so a human can see what was waved through."""
+    lines = [
+        "> [!NOTE]",
+        f"> {len(suppressed)} finding(s) suppressed by `mergeguard:ignore-secret` "
+        "or path allow-list. These lines were not sent to the AI.",
+    ]
+    for item in suppressed[:MAX_LISTED_FINDINGS]:
+        label = RULE_LABELS.get(item.rule_id, item.rule_id)
+        via = SUPPRESSION_VIA.get(item.via, item.via)
+        lines.append(f"> - {label}: {_code(item.filename)} line {item.line} ({via})")
+    hidden = len(suppressed) - MAX_LISTED_FINDINGS
+    if hidden > 0:
+        lines.append(f"> - …and {hidden} more.")
+    return "\n".join(lines)
 
 
 def _file_list(names: Sequence[str]) -> str:
