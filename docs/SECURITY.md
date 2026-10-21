@@ -172,7 +172,9 @@ The queues use SSE-SQS. The dead-letter queue accepts redrives only from the rev
 
 checkov runs in CI on every PR (TESTING_STRATEGY.md §5). Each accepted finding is skipped **inline on its resource**, with the reason next to it. There are no blanket skips. API Gateway access logging (CKV_AWS_76) was fixed rather than skipped.
 
-**What is confirmed and what is not.** The first group below (M4, `terraform/main.tf`) was confirmed by CI on PR #4: checkov reported 27 passed, 0 failed and 11 skipped for the Terraform checks, after the secrets-scan false positive (a Terraform local named like a credential) was fixed by renaming it. The second group (M5) was written **without a checkov run**: checkov could not be installed locally in M5 (very slow package downloads), so those skips are expected findings, not confirmed ones. The M4 Lambda skips now apply to both Lambda functions. The first real result for the M5 resources comes from CI on the M5 PR, and any skip that CI does not need must be removed, and any finding it reports must be fixed or justified here.
+**Confirmed by CI.** PR #4 (M4): 27 passed, 0 failed, 11 skipped, after the secrets-scan false positive (a Terraform local named like a credential) was fixed by renaming it. PR #5 (M5): 78 passed, 0 failed, 33 skipped over `terraform/` and `terraform/bootstrap/`. Checkov could not be installed locally in M5 (very slow package downloads), so CI was its first run on the M5 resources. Every skip below was triggered, so none is unused. The M4 Lambda skips now apply to both Lambda functions.
+
+**A parsing error is a finding.** The first M5 run reported `Parsing errors: 1`: checkov's HCL parser could not read `terraform/variables.tf` (a `for` condition continued across lines), so it **skipped the file and still exited 0**. The condition was split into one-line validations, and the CI policy-scan step now fails if checkov reports a parsing error.
 
 **Confirmed in CI (M4)**
 
@@ -190,15 +192,15 @@ checkov runs in CI on every PR (TESTING_STRATEGY.md §5). Each accepted finding 
 | CKV_AWS_309 (route authorisation) | `POST /webhook` route | GitHub cannot send IAM or JWT credentials; the Lambda verifies the HMAC signature first (FR-002, TM-01) |
 | CKV2_AWS_51 (client certificate) | `$default` stage | Client certificates apply to HTTP backends of WebSocket APIs; this HTTP API calls Lambda directly |
 
-**Expected, not yet confirmed (M5)**
+**Confirmed in CI (M5)**
 
-| Check | Resource | Why it would be accepted |
+| Check | Resource | Why it is accepted |
 | --- | --- | --- |
 | CKV_AWS_26 (SNS encryption) | `aws_sns_topic.alerts` | CloudWatch alarms cannot publish to a topic encrypted with the AWS-managed key, and a customer-managed key adds cost and a key policy; messages hold alarm names and values only |
 | CKV_AWS_18, CKV_AWS_144, CKV_AWS_145, CKV2_AWS_62 | State bucket (`terraform/bootstrap`) | No access-log bucket, replication, customer-managed key or event notifications: state holds no secret values (ADR-0007), is versioned, and can be rebuilt |
 | CKV_AWS_355, CKV_AWS_290, CKV_AWS_287, CKV_AWS_289, CKV_AWS_288 | Deploy role policy (`terraform/bootstrap`) | A few AWS actions have no resource-level permissions; every write is scoped to `mergeguard*` in one account and region; the residual risks are in §5.10 |
 
-The SQS queues use SSE-SQS (`sqs_managed_sse_enabled`), the alarms and the budget carry no skip, and no checkov ID is skipped for them. If CI reports one, it is a finding to fix, not to skip.
+The SQS queues use SSE-SQS (`sqs_managed_sse_enabled`), and the queues, alarms and budget carry no skip: checkov passed them as written.
 
 ### 5.10 CI deploy pipeline (T-505, ADR-0009)
 
