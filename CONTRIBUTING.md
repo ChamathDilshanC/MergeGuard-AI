@@ -2,7 +2,7 @@
 
 Thank you for your interest. This project is maintained by [@ChamathDilshanC](https://github.com/ChamathDilshanC), the sole listed maintainer, who reviews and merges all changes.
 
-> **Project status:** the M1 foundation (tooling, Terraform skeleton, CI) is in place; no product feature is implemented yet. Feature work starts with milestone M2 in [docs/TASKS.md](docs/TASKS.md).
+> **Project status:** milestones M1 to M5 are implemented and tested with fakes (the webhook pipeline, the Gemini review with mocked responses, the Terraform stack, and the Phase 2 queue, status, dismissal, suppression, alarm and deploy work). Nothing is deployed. See [docs/TASKS.md](docs/TASKS.md) for what is next.
 
 ## 1. Before you start
 

@@ -9,7 +9,7 @@
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) · [API spec](API_SPEC.md) · [Security](SECURITY.md) · [Tasks](TASKS.md) |
 
-> **Implementation status:** M1 (skeleton, tooling, CI), M2 (webhook pipeline) and M3 (Gemini review, tested with mocked responses only) are implemented. The M4 Terraform stack is written and plan-tested but has never been applied; the AI evaluation (T-304) and any deployment do not exist yet. Section 7 shows the status of each capability — see the [status legend](README.md#status-legend).
+> **Implementation status:** M1 (skeleton, tooling, CI), M2 (webhook pipeline) and M3 (Gemini review, tested with mocked responses only) are implemented. The M4 Terraform stack is written and plan-tested but has never been applied. M5 (Phase 2: receiver/worker split with a queue, commit status, stale-review dismissal, scanner suppressions, alarms and budget, and a CI deploy workflow) is implemented and tested with fakes. The AI evaluation (T-304) and any deployment do not exist yet. Section 7 shows the status of each capability — see the [status legend](README.md#status-legend).
 
 ---
 
@@ -107,10 +107,10 @@ Status as of M2: "Verified (M2 tests)" means implemented and covered by the auto
 | Structured, redacted logging | Verified (M2 tests) | 1 | FR-013 |
 | Duplicate-review prevention | Verified (M2 tests) | 1 | FR-014 |
 | Dry-run mode | Verified (M2 tests) | 1 | FR-015 |
-| Fast acknowledgement and async processing | Proposed | 2 | FR-016 |
-| Commit status check | Proposed | 2 | FR-017 |
-| Stale review dismissal | Proposed | 2 | FR-018 |
-| Scanner suppressions | Proposed | 2 | FR-019 |
+| Fast acknowledgement and async processing | Verified (M5 tests with a fake SQS; not deployed, latency not measured) | 2 | FR-016 |
+| Commit status check | Verified (M5 tests; not deployed) | 2 | FR-017 |
+| Stale review dismissal | Verified (M5 tests; not deployed) | 2 | FR-018 |
+| Scanner suppressions | Verified (M5 tests; [ADR-0008](ADR/0008-scanner-suppressions-are-visible-and-withheld-from-ai.md)) | 2 | FR-019 |
 | GitHub App authentication | Proposed | 3 | FR-020 |
 | Inline line-level comments | Proposed | 3 | FR-021 |
 | Per-repository configuration | Proposed | 3 | FR-022 |
@@ -337,17 +337,19 @@ The policy is evaluated in code, never by the model:
 
 ### FR-016 — Fast acknowledgement and async processing
 
-**Priority:** P1 · **Phase:** 2 · **Status:** Proposed ([ADR-0005](ADR/0005-async-webhook-processing.md))
+**Priority:** P1 · **Phase:** 2 · **Status:** Verified in code and tests (M5); not deployed, so the latency criterion is not yet measured ([ADR-0005](ADR/0005-async-webhook-processing.md))
 
 *Acceptance criteria:*
 
-1. After verification and filtering, the endpoint returns `202` in under 2 s at p95 — well inside GitHub's 10-second delivery timeout.
+1. After verification and filtering, the endpoint returns `202` in under 2 s at p95 — well inside GitHub's 10-second delivery timeout. *(The receiver makes no GitHub or Gemini call; the p95 is measured in T-403.)*
 2. Queued work holds metadata only (delivery ID, repository, PR number, head SHA, action), never code.
 3. Failed work is retried and finally moved to a dead-letter queue. Duplicates are absorbed by FR-014.
+4. The receiver reads only the webhook secret and the worker only the GitHub token and the Gemini key, each under its own IAM role.
+5. The worker re-checks that the pull request is still open and still at the queued head SHA before the AI call and again before posting (EC-07).
 
 ### FR-017 — Commit status check
 
-**Priority:** P1 · **Phase:** 2 · **Status:** Proposed
+**Priority:** P1 · **Phase:** 2 · **Status:** Verified in code and tests (M5); not deployed
 
 *Acceptance criteria:*
 
@@ -358,23 +360,26 @@ The policy is evaluated in code, never by the model:
    - `error` for internal failure.
 2. The token's required permission (`Commit statuses: write`) is documented in [DEPLOYMENT.md](DEPLOYMENT.md).
 3. The owner can mark the status as required in branch protection.
+4. *(M5)* `pending` is set once the PR is known to need a review (after the duplicate check), `failure` follows the **decision** (also when GitHub made the review a comment), and a redelivery finishes the status from the existing review, so a crash cannot leave a check stuck. A failed status call never stops the review. Off unless `MERGEGUARD_COMMIT_STATUS` is `true`.
 
 ### FR-018 — Stale review dismissal
 
-**Priority:** P1 · **Phase:** 2 · **Status:** Proposed
+**Priority:** P1 · **Phase:** 2 · **Status:** Verified in code and tests (M5); not deployed
 
 *Acceptance criteria:*
 
 1. When a newer head SHA ends in `COMMENT`, earlier MergeGuard `REQUEST_CHANGES` reviews on that PR are dismissed with a message naming the new SHA. Without this, an old blocking review keeps the PR blocked after the author fixed the issue.
+2. *(M5)* Only the bot's own older reviews that carry the marker are dismissed (TM-14). A refused dismissal (a protected branch) is logged and does not stop the review. A retry finishes it. A PR whose new head has no reviewable patch posts no review and dismisses nothing, which is a known limit. An *AI review unavailable* comment is a `COMMENT`, so it also dismisses an earlier AI-based block (the new commit's secret scan was clean); keeping the block through an AI outage would be a policy change.
 
 ### FR-019 — Scanner suppressions
 
-**Priority:** P2 · **Phase:** 2 · **Status:** Proposed
+**Priority:** P2 · **Phase:** 2 · **Status:** Verified in code and tests (M5) ([ADR-0008](ADR/0008-scanner-suppressions-are-visible-and-withheld-from-ai.md))
 
 *Acceptance criteria:*
 
 1. An inline marker `mergeguard:ignore-secret` on the same line, or a configured path allowlist (for example `tests/fixtures/**`), suppresses a finding.
 2. Every suppression is listed in the review for transparency.
+3. *(M5)* The allow-list is set by the operator (`scan_allow_paths`), not by the pull request, and a malformed or all-matching pattern fails closed. Suppressed lines are withheld from the AI. An unsuppressed finding still means no AI call (FR-006).
 
 ### FR-020 — GitHub App authentication
 
@@ -439,14 +444,14 @@ The policy is evaluated in code, never by the model:
 | EC-04 | Very large PR (more than `MERGEGUARD_MAX_FILES` files or `MERGEGUARD_MAX_DIFF_CHARS` characters) | Partial review with explicit notice; secret scan still covers every retrieved patch |
 | EC-05 | Binary-only or patch-less changes | No review; logged `no_patches` |
 | EC-06 | Force-push (`synchronize` with rewritten history) | Reviewed as the new head SHA |
-| EC-07 | Rapid successive pushes | Each SHA is reviewed; GitHub marks reviews on older SHAs as outdated. Phase 2 checks that the head is still current before posting |
+| EC-07 | Rapid successive pushes | Each SHA is reviewed; GitHub marks reviews on older SHAs as outdated. The Phase 2 worker checks that the head is still current before the AI call and before posting, and skips a stale SHA |
 | EC-08 | PR authored by the bot token's owner | `REQUEST_CHANGES` rejected with `422`; retried as `COMMENT` (FR-010) |
 | EC-09 | PR that removes a previously committed secret | Not flagged; only added lines are scanned |
 | EC-10 | Gemini `429` or quota exhaustion | AI-unavailable comment (FR-008) |
 | EC-11 | GitHub API rate limit (`403`/`429`) | Logged; `500` returned so the delivery shows as failed and can be redelivered |
 | EC-12 | Webhook secret changed in GitHub but not in SSM, or the reverse | All deliveries `401` until both match ([DEPLOYMENT.md](DEPLOYMENT.md) runbook) |
 | EC-13 | Expired or revoked GitHub token | GitHub returns `401`; logged as `github.auth_failed`; `500` response |
-| EC-14 | PR closed between event and processing | Review is still attempted; a GitHub error is logged and not retried |
+| EC-14 | PR closed between event and processing | Inline mode: the review is still attempted and a GitHub error is logged. The Phase 2 worker skips a closed PR (`pr_closed`) |
 | EC-15 | Webhook redelivered by an operator | Duplicate suppressed (FR-014) |
 
 ## 12. Non-functional requirements
@@ -461,7 +466,7 @@ All targets are **Proposed** until the owner confirms them.
 | NFR-004 | Security | Least privilege for the Lambda role and the GitHub token | No wildcard account or region in IAM ARNs; token limited to selected repositories | Terraform review, checkov ([TESTING_STRATEGY.md](TESTING_STRATEGY.md) §5) |
 | NFR-005 | Privacy | No code persisted by MergeGuard; diffs with secret findings never leave AWS | 100% of secret-positive test cases make zero Gemini calls | Unit and integration tests |
 | NFR-006 | Privacy | No sensitive values in logs or comments | Zero occurrences in the redaction test suite | Log-redaction tests |
-| NFR-007 | Cost | Running cost at small-team scale | Within the owner's budget (TBD, [OQ-05](#17-open-questions)); AWS Budgets alert configured | AWS Cost Explorer |
+| NFR-007 | Cost | Running cost at small-team scale | Within the owner's budget (TBD, [OQ-05](#17-open-questions)); AWS Budgets alert configured (written in M5; it exists once the owner sets `monthly_budget_usd` and `alert_email`) | AWS Cost Explorer |
 | NFR-008 | Maintainability | Zero runtime dependencies beyond stdlib and `boto3` | Lambda package contains first-party code only | Package inspection in CI |
 | NFR-009 | Maintainability | Automated test coverage of `src/` | ≥ 85% line coverage | `pytest --cov` in CI |
 | NFR-010 | Scalability | Concurrent PR events | Handles bursts of parallel deliveries; cost bounded by throttling and optional reserved concurrency | Load test (Phase 2) |
@@ -538,7 +543,7 @@ All targets are **Proposed** until the owner confirms them.
 | --- | --- | --- | --- |
 | 0 — Documentation | Shared understanding before code | This documentation suite | Owner reviews docs and answers M1 open questions |
 | 1 — MVP | Brief parity with its defects fixed | FR-001 to FR-015; milestones M1–M4 in [TASKS.md](TASKS.md) | §8 scenarios pass on a deployed stack |
-| 2 — Reliability and signal | Fast acknowledgement, mergeable status, less noise | FR-016 to FR-019, remote state, CI/CD deploy | SM-2 met; stale reviews no longer block |
+| 2 — Reliability and signal | Fast acknowledgement, mergeable status, less noise | FR-016 to FR-019, remote state, CI/CD deploy, alarms and budget; milestone M5 in [TASKS.md](TASKS.md), implemented and tested with fakes | SM-2 met on a deployed stack; stale reviews no longer block |
 | 3 — Distribution | Multi-repo use with a proper bot identity | FR-020 to FR-022 | Installed on at least two repositories via a GitHub App |
 
 ## 19. Traceability
@@ -560,10 +565,10 @@ All targets are **Proposed** until the owner confirms them.
 | FR-013 | §12 | — | T-208 | Log-redaction tests |
 | FR-014 | §11 | — | T-209 | Integration: redelivery |
 | FR-015 | §10 | — | T-210 | Integration: dry run |
-| FR-016 | §15 | 0005 | T-501 | Integration + load |
-| FR-017 | §15 | — | T-502 | Contract |
-| FR-018 | §15 | — | T-503 | Contract |
-| FR-019 | §5 scanner | 0004 | T-504 | Scanner corpus |
+| FR-016 | §15 | 0005 | T-501 | Integration (fake SQS); load measured after deploy |
+| FR-017 | §15 | — | T-502 | Contract + integration |
+| FR-018 | §15 | — | T-503 | Contract + integration |
+| FR-019 | §5 scanner | 0004, 0008 | T-504 | Scanner corpus + integration |
 | FR-020 | §15 | 0006 | T-601 | Contract |
 | FR-021 | §15 | — | T-602 | Contract |
 | FR-022 | §15 | 0002 | T-603 | Unit |
