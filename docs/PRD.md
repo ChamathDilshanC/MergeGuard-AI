@@ -369,7 +369,7 @@ The policy is evaluated in code, never by the model:
 *Acceptance criteria:*
 
 1. When a newer head SHA ends in `COMMENT`, earlier MergeGuard `REQUEST_CHANGES` reviews on that PR are dismissed with a message naming the new SHA. Without this, an old blocking review keeps the PR blocked after the author fixed the issue.
-2. *(M5)* Only the bot's own older reviews that carry the marker are dismissed (TM-14). A refused dismissal (a protected branch) is logged and does not stop the review. A retry finishes it. A PR whose new head has no reviewable patch posts no review and dismisses nothing, which is a known limit. An *AI review unavailable* comment is a `COMMENT`, so it also dismisses an earlier AI-based block (the new commit's secret scan was clean); keeping the block through an AI outage would be a policy change.
+2. *(M5)* Only the bot's own older reviews that carry the marker are dismissed (TM-14). A refused dismissal (a protected branch) is logged and does not stop the review. A retry finishes it. A PR whose new head has no reviewable patch posts no review and dismisses nothing, which is a known limit. A failed AI review must not clear a real block, so after an *AI review unavailable* comment only earlier **secret** blocks are dismissed (the new commit's deterministic scan was clean); an earlier AI-based block stays until a later review of the PR finishes without blocking. This departs from the literal wording of criterion 1, by the owner's decision.
 
 ### FR-019 — Scanner suppressions
 

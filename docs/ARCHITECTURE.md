@@ -240,7 +240,7 @@ MergeGuard is **stateless and has no database by design**. GitHub stores PRs and
 | `ScanResult` (`scanner.py`) | `findings`, `suppressed` | Result of the suppression-aware scan |
 | `ReviewRequest` (`review_queue.py`) | `delivery_id`, `action`, `pr` | A validated queue message; `pr` carries only repository, number and head SHA |
 | `PullState` (`github_client.py`) | `head_sha`, `state` | What the worker re-checks before and after the AI call |
-| `Verdict` (`pipeline.py`) | `CLEAR`, `BLOCKED_SECRETS`, `BLOCKED_AI` | What a review means for merging; drives the commit status and whether stale reviews are dismissed |
+| `Verdict` (`pipeline.py`) | `CLEAR`, `UNREVIEWED`, `BLOCKED_SECRETS`, `BLOCKED_AI` | What a review means for merging; drives the commit status and which stale reviews are dismissed (`UNREVIEWED`: scan clean, AI failed; only secret blocks are dismissed) |
 | `AIReview` | `risk_level`, `bugs_found`, `summary`, `feedback_markdown`, `model` | Validated output |
 | `Decision` (`policy.py`) | `event`, `template`, `reason` | Output of `policy`; `render` turns it into the review body |
 | `Outcome` (`pipeline.py`) | `http_status`, `status`, `reason` | Mapped to the HTTP response envelope |

@@ -89,7 +89,7 @@ The suite enforces **0%** flagged negatives, stricter than the SM-3 gate.
 | ST-09 | Policy exhaustive table | `APPROVE` is never returned for any input combination |
 | ST-10 | A finding suppressed by the inline marker or the path allow-list | The PR is not blocked; the review lists the rule, file, line and method (`N-SUPPRESSED`); the flagged value is absent from the review, the logs and the Gemini request body, which holds a withheld-line stub instead. For a suppressed private-key header, the key lines after it are withheld too |
 | ST-11 | A suppressed finding next to an unsuppressed one | `REQUEST_CHANGES`, only the unsuppressed finding in the table, the suppressed one in the notice, zero Gemini calls |
-| ST-12 | Dismissal safety: older blocking reviews by another user, without the marker, already dismissed, or on the current head | Only the bot's own older `CHANGES_REQUESTED` reviews carrying the marker are dismissed |
+| ST-12 | Dismissal safety: older blocking reviews by another user, without the marker, already dismissed, or on the current head | Only the bot's own older `CHANGES_REQUESTED` reviews carrying the marker are dismissed; after an AI failure only the secret blocks are |
 | ST-13 | Queue messages: malformed, wrong schema, bad repository, SHA or action, and a message with extra author or title fields | The receiver's message holds metadata only; the worker rejects every malformed message (it is retried, then dead-lettered) and makes no GitHub or Gemini call |
 | ST-14 | Receiver with only the webhook secret readable | Works; the receiver never asks SSM for the token or the Gemini key. The worker never asks for the webhook secret |
 

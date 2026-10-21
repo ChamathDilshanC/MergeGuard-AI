@@ -64,12 +64,16 @@ class Verdict(StrEnum):
     """What the review means for merging; drives the commit status."""
 
     CLEAR = "clear"
+    # The scan was clean but the AI review failed. Nothing blocks, yet a failed
+    # review must not clear an earlier AI-based block (FR-018).
+    UNREVIEWED = "unreviewed"
     BLOCKED_SECRETS = "blocked_secrets"
     BLOCKED_AI = "blocked_ai"
 
 
 STATUS_FOR_VERDICT = {
     Verdict.CLEAR: STATUS_CLEAR,
+    Verdict.UNREVIEWED: STATUS_CLEAR,
     Verdict.BLOCKED_SECRETS: STATUS_BLOCKED_SECRETS,
     Verdict.BLOCKED_AI: STATUS_BLOCKED_AI,
 }
@@ -237,8 +241,8 @@ class ReviewPipeline:
         """Publish what the review means: the commit status, and the end of any
         earlier blocking review when nothing blocks any more."""
         self._set_status(pr, STATUS_FOR_VERDICT[verdict])
-        if verdict is Verdict.CLEAR:
-            self._dismiss_stale(pr)
+        if verdict in (Verdict.CLEAR, Verdict.UNREVIEWED):
+            self._dismiss_stale(pr, keep_ai_blocks=verdict is Verdict.UNREVIEWED)
 
     def _set_status(self, pr: PullRequestRef, text: tuple[str, str]) -> None:
         if not self._commit_status or self._dry_run:
@@ -253,10 +257,12 @@ class ReviewPipeline:
         if sent:
             self._log.log("status.set", commit_state=state)
 
-    def _dismiss_stale(self, pr: PullRequestRef) -> None:
+    def _dismiss_stale(self, pr: PullRequestRef, *, keep_ai_blocks: bool) -> None:
         """Dismiss the bot's earlier ``REQUEST_CHANGES`` reviews (FR-018): a
         later ``COMMENT`` review does not replace them, so they would keep
-        blocking a pull request that was fixed (RB-11)."""
+        blocking a pull request that was fixed (RB-11). After a failed AI review
+        only earlier secret blocks go: the new scan is clean, but nothing
+        reassessed the AI findings."""
         if self._dry_run:
             return
         login = self._github.authenticated_login()
@@ -271,6 +277,8 @@ class ReviewPipeline:
                 and _has_marker(review)
                 and type(review_id) is int
             ):
+                continue
+            if keep_ai_blocks and _kind(review) != "security":
                 continue
             sent = self._best_effort(
                 "review.dismissal_failed",
@@ -325,6 +333,8 @@ def _verdict_for(decision: Decision) -> Verdict:
     """By the decision, not the posted event: a fallback comment on the author's
     own pull request still means changes are requested."""
     if decision.event is not ReviewEvent.REQUEST_CHANGES:
+        if decision.template is Template.AI_UNAVAILABLE:
+            return Verdict.UNREVIEWED
         return Verdict.CLEAR
     if decision.template is Template.SECURITY:
         return Verdict.BLOCKED_SECRETS
@@ -335,12 +345,22 @@ def _verdict_of(review: dict[str, Any]) -> Verdict:
     """The verdict an existing MergeGuard review stands for."""
     body = review.get("body")
     text = body if isinstance(body, str) else ""
-    kind = _KIND_RE.match(text)
-    if kind and kind.group(1) == "security":
+    kind = _kind(review)
+    if kind == "security":
         return Verdict.BLOCKED_SECRETS
     if review.get("state") == "CHANGES_REQUESTED" or FALLBACK_CALLOUT in text:
         return Verdict.BLOCKED_AI
+    if kind == "ai-unavailable":
+        return Verdict.UNREVIEWED
     return Verdict.CLEAR
+
+
+def _kind(review: dict[str, Any]) -> str | None:
+    """The ``kind`` in a review's hidden marker (``security``, ``ai-review``,
+    ``ai-unavailable``)."""
+    body = review.get("body")
+    match = _KIND_RE.match(body) if isinstance(body, str) else None
+    return match.group(1) if match else None
 
 
 def _author(review: dict[str, Any]) -> str | None:

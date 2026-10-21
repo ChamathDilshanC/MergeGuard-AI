@@ -188,7 +188,7 @@ Context `mergeguard/review`, set on the head SHA. Off unless `MERGEGUARD_COMMIT_
 
 ### 5.6.1 Dismissal message (FR-018)
 
-When a later review of the same pull request has no blocking result, each earlier `REQUEST_CHANGES` review of MergeGuard is dismissed with: "MergeGuard AI: superseded by the review of commit `<short-sha>`, which found no blocking issues. See the latest MergeGuard review."
+When a later review of the same pull request has no blocking result, each earlier `REQUEST_CHANGES` review of MergeGuard is dismissed. If that later review is *AI review unavailable* (`T-AIU`), only earlier `T-SEC` reviews are dismissed and an earlier `T-AI` block stays. The message is: "MergeGuard AI: superseded by the review of commit `<short-sha>`, which found no blocking issues. See the latest MergeGuard review."
 
 ### 5.7 Sanitisation of model output
 

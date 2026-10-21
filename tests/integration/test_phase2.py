@@ -655,14 +655,42 @@ def test_a_fixed_pr_dismisses_the_earlier_blocking_review():
     assert done["dismissed"] == 2
 
 
-def test_an_ai_unavailable_comment_also_ends_an_earlier_block():
+def test_an_ai_unavailable_comment_keeps_an_earlier_ai_block():
+    """A failed review must not clear a real AI-based block (FR-018)."""
     transport = github_api(
         files=[file_entry("a.py", CLEAN_PATCH)],
-        reviews=[bot_review(11)],
+        reviews=[bot_review(11, kind="ai-review")],
         gemini=(TransportError("timeout"),),
     )
     run_worker(transport, request_body())
-    assert len(dismissals(transport)) == 1
+    assert posted_reviews(transport)[0]["event"] == "COMMENT"
+    assert dismissals(transport) == []
+
+
+def test_an_ai_unavailable_comment_still_ends_an_earlier_secret_block():
+    """The new commit's deterministic scan was clean, so the secret block is
+    resolved even though the AI review failed."""
+    transport = github_api(
+        files=[file_entry("a.py", CLEAN_PATCH)],
+        reviews=[bot_review(11, kind="security"), bot_review(12, kind="ai-review")],
+        gemini=(TransportError("timeout"),),
+    )
+    run_worker(transport, request_body())
+    assert [c.url.rsplit("/", 2)[-2] for c in dismissals(transport)] == ["11"]
+
+
+def test_a_retry_after_an_ai_failure_keeps_the_ai_block_too():
+    transport = github_api(
+        files=[file_entry("a.py", CLEAN_PATCH)],
+        reviews=[
+            bot_review(11, kind="ai-review"),
+            bot_review(
+                13, state="COMMENTED", commit_id=HEAD_SHA, kind="ai-unavailable"
+            ),
+        ],
+    )
+    run_worker(transport, request_body())
+    assert posted_reviews(transport) == [] and dismissals(transport) == []
 
 
 @pytest.mark.parametrize(
