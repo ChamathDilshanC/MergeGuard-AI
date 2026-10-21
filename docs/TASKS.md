@@ -47,16 +47,24 @@
 
 | ID | Task | Requirements | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- |
-| T-201 | Handler and event/action filtering | FR-001, FR-003, RB-04 | T-102 | Unit tests for ping, non-PR events, each action, drafts; API responses match [API_SPEC.md](API_SPEC.md) §2.3 | Not started |
-| T-202 | Signature verification incl. base64 bodies | FR-002, RB-14 | T-201 | ST-01 to ST-04 pass | Not started |
-| T-203 | Config loader: env vars + cached `GetParameters` with TTL | FR-011, RB-13 | T-102 | Fail-closed on missing parameter; TTL unit-tested | Not started |
-| T-204 | HTTP transport + GitHub client (files pagination, reviews, timeouts, error mapping) | FR-004, RB-06, RB-08 | T-102 | Contract tests for page 1/2, no-patch files, each error class in [API_SPEC.md](API_SPEC.md) §3.2 | Not started |
-| T-205 | Secret scanner over added lines with corpus | FR-005, RB-02, RB-03 | T-102 | Corpus gates in [TESTING_STRATEGY.md](TESTING_STRATEGY.md) §4 pass; rule IDs match [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) §8 | Not started |
-| T-206 | Renderer: templates, notices, sanitisation, length caps | FR-009, RB-15, RB-16 | T-102 | Snapshot tests for every template and notice; ST-07 passes | Not started |
-| T-207 | Decision policy, leak gate and `422` fallback | FR-006, FR-010, RB-01, RB-10 | T-204, T-205, T-206 | ST-05 and ST-09 pass; fallback contract test passes | Not started |
-| T-208 | Structured logging with allow-listed fields | FR-013 | T-201 | ST-06 passes | Not started |
-| T-209 | Duplicate-review prevention | FR-014, RB-12 | T-204, T-206 | Redelivery integration test produces exactly one review | Not started |
-| T-210 | Dry-run mode | FR-015 | T-207 | No GitHub write calls when enabled (asserted on fake transport) | Not started |
+| T-201 | Handler and event/action filtering | FR-001, FR-003, RB-04 | T-102 | Unit tests for ping, non-PR events, each action, drafts; API responses match [API_SPEC.md](API_SPEC.md) §2.3 | Done |
+| T-202 | Signature verification incl. base64 bodies | FR-002, RB-14 | T-201 | ST-01 to ST-04 pass | Done |
+| T-203 | Config loader: env vars + cached `GetParameters` with TTL | FR-011, RB-13 | T-102 | Fail-closed on missing parameter; TTL unit-tested | Done |
+| T-204 | HTTP transport + GitHub client (files pagination, reviews, timeouts, error mapping) | FR-004, RB-06, RB-08 | T-102 | Contract tests for page 1/2, no-patch files, each error class in [API_SPEC.md](API_SPEC.md) §3.2 | Done |
+| T-205 | Secret scanner over added lines with corpus | FR-005, RB-02, RB-03 | T-102 | Corpus gates in [TESTING_STRATEGY.md](TESTING_STRATEGY.md) §4 pass; rule IDs match [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) §8 | Done |
+| T-206 | Renderer: templates, notices, sanitisation, length caps | FR-009, RB-15, RB-16 | T-102 | Snapshot tests for every template and notice; ST-07 passes | Done (except `N-SUPPRESSED`, moved to T-504) |
+| T-207 | Decision policy, leak gate and `422` fallback | FR-006, FR-010, RB-01, RB-10 | T-204, T-205, T-206 | ST-05 and ST-09 pass; fallback contract test passes | Done |
+| T-208 | Structured logging with allow-listed fields | FR-013 | T-201 | ST-06 passes | Done |
+| T-209 | Duplicate-review prevention | FR-014, RB-12 | T-204, T-206 | Redelivery integration test produces exactly one review | Done |
+| T-210 | Dry-run mode | FR-015 | T-207 | No GitHub write calls when enabled (asserted on fake transport) | Done |
+
+**M2 notes:**
+
+- **No AI step yet.** With a clean scan, M2 posts nothing and answers `skipped` / `ai_not_enabled` ([API_SPEC.md](API_SPEC.md) §2.3). M3 inserts the AI review between the scan and the decision.
+- **Duplicate check verifies the reviewer identity** (`GET /user`) as well as the marker and SHA, so a copied marker cannot suppress a security review ([SECURITY.md](SECURITY.md) TM-14).
+- **POSTs are not retried on `5xx`,** because the review may already exist ([API_SPEC.md](API_SPEC.md) §3.2).
+- **Open questions:** draft PRs are skipped (the documented proposal for OQ-09, a single constant in `webhook.py`). Comments are English only (OQ-03). AI `MEDIUM` requests changes, as in the brief (OQ-04, exercised from M3). None of these blocked M2, and none is settled.
+- **Self-scan:** a test scans this repository with the scanner. It found and fixed one false positive class: values like `"{name}"` (format templates).
 
 ## M3 — AI review
 
@@ -83,7 +91,7 @@
 | T-501 | Receiver/worker split with SQS and DLQ | FR-016, ADR-0005, RB-05 | p95 acknowledgement < 2 s; DLQ alarm; duplicates absorbed | Not started |
 | T-502 | Commit status `mergeguard/review` | FR-017 | States per [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) §5.6; usable as a required check | Not started |
 | T-503 | Dismiss stale MergeGuard `REQUEST_CHANGES` reviews | FR-018, RB-11 | Fixing a flagged PR leaves no active blocking MergeGuard review | Not started |
-| T-504 | Scanner suppressions | FR-019 | Inline marker and path allow-list tested; suppressions listed in the review | Not started |
+| T-504 | Scanner suppressions, including the `N-SUPPRESSED` notice | FR-019 | Inline marker and path allow-list tested; suppressions listed in the review | Not started |
 | T-505 | Remote Terraform state and OIDC-based deploy workflow | [DEPLOYMENT.md](DEPLOYMENT.md) §8 | Deploy from CI with approval; no static AWS keys in GitHub | Not started |
 | T-506 | Alarms and AWS Budgets alert | NFR-007, TM-08 | Alarms fire in a test; budget alert configured | Not started |
 

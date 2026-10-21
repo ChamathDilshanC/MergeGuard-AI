@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — contracts for implementation; **no endpoint is deployed yet** |
+| Status | Draft v0.1 — inbound contract (§2) and GitHub/SSM calls (§3, §5) implemented in M2 and tested; Gemini (§4) arrives in M3; **nothing is deployed yet** |
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) · [AI system](AI_SYSTEM.md) · [Security](SECURITY.md) |
 
@@ -56,10 +56,12 @@ Only these fields of the GitHub `pull_request` event payload are read. Everythin
 | --- | --- | --- | --- |
 | Missing or invalid signature | `401` | `rejected` | `invalid_signature` |
 | Valid signature, body is not valid JSON | `400` | `rejected` | `malformed_json` |
+| Valid signature, JSON is not a usable `pull_request` payload (missing fields, invalid repository name or SHA) | `400` | `rejected` | `malformed_payload` |
 | `ping` event | `200` | `pong` | — |
 | Event other than `pull_request` | `200` | `ignored` | `event_not_supported` |
 | Action not in allow-list, or draft PR | `200` | `ignored` | `action_not_supported`, `draft` |
 | No file with a patch | `200` | `skipped` | `no_patches` |
+| Secret scan clean, no AI reviewer yet (M2 builds only; replaced by the AI review in M3) | `200` | `skipped` | `ai_not_enabled` |
 | Review already exists for this head SHA | `200` | `duplicate` | — |
 | Review posted (Phase 1, synchronous) | `200` | `reviewed` | `REQUEST_CHANGES`, `COMMENT` |
 | Dry run completed | `200` | `dry_run` | decision value |
@@ -67,6 +69,8 @@ Only these fields of the GitHub `pull_request` event payload are read. Everythin
 | Configuration, SSM, GitHub auth, rate-limit or unexpected error | `500` | `error` | `internal` (details only in logs) |
 
 Ignored events deliberately return `2xx`, so GitHub's *Recent Deliveries* list only shows real failures. Any path or method other than `POST /webhook` gets API Gateway's own `404` and never reaches Lambda.
+
+`delivery_id` echoes `X-GitHub-Delivery` only if it looks like a delivery GUID (letters, digits and `-`, at most 64 characters). Otherwise it is `invalid`, because the header is attacker-controlled on unsigned requests.
 
 ### 2.4 Example
 
@@ -106,7 +110,8 @@ Content-Type: application/json
 | Purpose | Method and path | Phase | Notes |
 | --- | --- | --- | --- |
 | List changed files | `GET /repos/{owner}/{repo}/pulls/{pull_number}/files?per_page=100&page={n}` | 1 | Follow pages until fewer than 100 items or `MERGEGUARD_MAX_FILES` is reached. GitHub returns at most 3,000 files. `patch` is absent for binary or very large files |
-| List reviews (duplicate check) | `GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews?per_page=100` | 1 | Match `commit_id` and the `mergeguard:v1` marker in `body` |
+| List reviews (duplicate check) | `GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews?per_page=100&page={n}` | 1 | Up to 10 pages. A duplicate needs matching `commit_id`, the `mergeguard:v1` marker in `body`, **and** `user.login` equal to the token owner |
+| Identify the token owner | `GET /user` | 1 | Cached per client. Used so a copied marker in someone else's review cannot suppress MergeGuard ([SECURITY.md](SECURITY.md) TM-14) |
 | Create review | `POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews` | 1 | Body below |
 | Dismiss a review | `PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals` | 2 | Body: `{"message": "...", "event": "DISMISS"}` (FR-018) |
 | Create commit status | `POST /repos/{owner}/{repo}/statuses/{sha}` | 2 | `context: "mergeguard/review"` (FR-017) |
@@ -132,7 +137,8 @@ Content-Type: application/json
 | `403` otherwise / `404` | Missing permission, or repository not covered by the token | Log `github.forbidden`; respond `500` |
 | `422` on create review with `REQUEST_CHANGES` | Typically "cannot request changes on your own pull request" | Retry once as `COMMENT` with fallback note (FR-010) |
 | `422` otherwise | Invalid body (for example too long) | Log `github.invalid_request`; respond `500` |
-| `5xx` | GitHub outage | One retry if time allows, otherwise `500` |
+| `5xx`, or no response (DNS, TLS, timeout) | GitHub outage or network failure | `GET`: one retry if time allows, otherwise `500`. `POST`: no retry (the review may already exist); log `github.unavailable`; `500` |
+| Any other status, or a body that is not the expected JSON | Unexpected response | Log `github.unexpected`; respond `500` |
 
 ### 3.3 Token permissions (fine-grained PAT, Phase 1)
 
@@ -187,7 +193,7 @@ Content-Type: application/json
 
 | Call | Parameters | Notes |
 | --- | --- | --- |
-| `GetParameters` | `Names = [<prefix>/github_token, <prefix>/webhook_secret, <prefix>/gemini_api_key]`, `WithDecryption = true` | One call per cold start or TTL expiry. Any entry in `InvalidParameters` means fail closed |
+| `GetParameters` | `Names = [<prefix>/github_token, <prefix>/webhook_secret, <prefix>/gemini_api_key]`, `WithDecryption = true` | One call per cold start or 15-minute TTL expiry. Any entry in `InvalidParameters`, or an empty value, means fail closed. M2 requests only the first two names; `gemini_api_key` is added with M3 |
 
 ## 6. Internal — queue message (Phase 2)
 

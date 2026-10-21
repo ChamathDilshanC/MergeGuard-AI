@@ -1,0 +1,18 @@
+{
+  "action": "opened",
+  "number": 7,
+  "pull_request": {
+    "number": 7,
+    "draft": false,
+    "head": {
+      "ref": "feature/add-config",
+      "sha": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "user": {
+      "login": "octocat"
+    }
+  },
+  "repository": {
+    "full_name": "owner/repo"
+  }
+}

@@ -1,6 +1,6 @@
 # MergeGuard AI — Serverless DevSecOps PR Reviewer
 
-> **Status: foundation (M1).** This repository contains the project documentation, the project skeleton, dev tooling, a Terraform skeleton, and CI. No product feature is implemented yet. See the [roadmap](docs/PRD.md#18-roadmap) and [backlog](docs/TASKS.md).
+> **Status: in development (M2).** The webhook pipeline without AI (signature check, secret scanner, review posting) is implemented and tested, but **not deployed**. The AI review (M3) and AWS infrastructure (M4) are not built yet. See the [roadmap](docs/PRD.md#18-roadmap) and [backlog](docs/TASKS.md).
 
 MergeGuard AI reviews GitHub pull requests automatically, without any server to run:
 

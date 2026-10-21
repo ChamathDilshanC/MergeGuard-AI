@@ -9,7 +9,7 @@
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) · [API spec](API_SPEC.md) · [Security](SECURITY.md) · [Tasks](TASKS.md) |
 
-> **Implementation status:** milestone M1 (project skeleton, dev tooling, Terraform skeleton, CI) is in place, but no application logic, infrastructure resources, or deployment exist yet. Every capability in this document is still **Planned (brief)** or **Proposed** — see the [status legend](README.md#status-legend).
+> **Implementation status:** M1 (skeleton, tooling, CI) and M2 (webhook pipeline without AI) are implemented and tested. The AI review (M3), AWS resources (T-401) and any deployment do not exist yet. Section 7 shows the status of each capability — see the [status legend](README.md#status-legend).
 
 ---
 
@@ -88,25 +88,25 @@ Primary audience is **unconfirmed** ([OQ-02](#17-open-questions)). Working assum
 
 ## 7. Feature overview — existing vs. planned
 
-No feature is implemented yet. "Planned (brief)" means the owner's brief specifies it; "Proposed" means this documentation recommends it and the owner still has to approve it.
+Status as of M2: "Verified (M2 tests)" means implemented and covered by the automated test suite, but not deployed. "Planned (brief)" means the owner's brief specifies it; "Proposed" means this documentation recommends it and the owner still has to approve it.
 
 | Feature | Status | Phase | Requirement |
 | --- | --- | --- | --- |
-| HTTPS webhook endpoint | Planned (brief) | 1 | FR-001 |
-| Webhook signature verification | Planned (brief) | 1 | FR-002 |
-| Event and action filtering | Planned (brief), extended | 1 | FR-003 |
-| Changed-file retrieval with pagination | Planned (brief), extended | 1 | FR-004 |
-| Deterministic secret scan | Planned (brief), extended | 1 | FR-005 |
-| Secret-leak gate (no AI egress) | Planned (brief) | 1 | FR-006 |
+| HTTPS webhook endpoint | Handler Verified (M2 tests); API Gateway Planned (T-401) | 1 | FR-001 |
+| Webhook signature verification | Verified (M2 tests) | 1 | FR-002 |
+| Event and action filtering | Verified (M2 tests) | 1 | FR-003 |
+| Changed-file retrieval with pagination | Verified (M2 tests) | 1 | FR-004 |
+| Deterministic secret scan | Verified (M2 tests) | 1 | FR-005 |
+| Secret-leak gate (no AI egress) | Verified (M2 tests) | 1 | FR-006 |
 | AI review with structured output | Planned (brief) | 1 | FR-007 |
 | AI output validation and fail-open | Proposed | 1 | FR-008 |
-| Review rendering and sanitisation | Planned (brief), extended | 1 | FR-009 |
-| Review decision policy | Planned (brief), extended | 1 | FR-010 |
-| Secrets in SSM Parameter Store | Planned (brief) | 1 | FR-011 |
-| Terraform infrastructure | Planned (brief), extended | 1 | FR-012 |
-| Structured, redacted logging | Proposed | 1 | FR-013 |
-| Duplicate-review prevention | Proposed | 1 | FR-014 |
-| Dry-run mode | Proposed | 1 | FR-015 |
+| Review rendering and sanitisation | Verified (M2 tests) | 1 | FR-009 |
+| Review decision policy | Verified (M2 tests) | 1 | FR-010 |
+| Secrets in SSM Parameter Store | Loader Verified (M2 tests); IAM Planned (T-401) | 1 | FR-011 |
+| Terraform infrastructure | Skeleton Verified (M1); resources Planned (T-401) | 1 | FR-012 |
+| Structured, redacted logging | Verified (M2 tests) | 1 | FR-013 |
+| Duplicate-review prevention | Verified (M2 tests) | 1 | FR-014 |
+| Dry-run mode | Verified (M2 tests) | 1 | FR-015 |
 | Fast acknowledgement and async processing | Proposed | 2 | FR-016 |
 | Commit status check | Proposed | 2 | FR-017 |
 | Stale review dismissal | Proposed | 2 | FR-018 |
