@@ -33,10 +33,15 @@
 
 | ID | Task | Requirements | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- |
-| T-101 | Scaffold layout from [ARCHITECTURE.md](ARCHITECTURE.md) §4.2 and add `.gitignore` | RB-17 | T-002 | `.gitignore` covers `.terraform/`, `*.tfstate*`, `tfplan`, `*.zip`, `terraform.tfvars`, `__pycache__/`, `.venv/`, `.env*`, `tests/ai_eval/results/` | Not started |
-| T-102 | Dev tooling: Python 3.12 pin, `requirements-dev.txt` (`pytest`, `pytest-cov`, `ruff`), `pyproject.toml` config | NFR-008, RB-01 | T-101 | `ruff check`, `ruff format --check` and `pytest` run locally; commands in [AGENTS.md](../AGENTS.md) §6 change from Proposed to Verified | Not started |
-| T-103 | Terraform skeleton: `versions.tf` and `providers.tf` with pinned versions, `variables.tf` from [DEPLOYMENT.md](DEPLOYMENT.md) §4 | FR-012, OQ-07 | T-101 | `terraform validate` passes; `.terraform.lock.hcl` committed | Not started |
-| T-104 | CI workflow `ci.yml`: lint, tests on 3.12, Terraform fmt/validate, checkov | §9 quality gates in [TESTING_STRATEGY.md](TESTING_STRATEGY.md) | T-102, T-103 | Workflow green on a PR; actions pinned to SHAs | Not started |
+| T-101 | Scaffold layout from [ARCHITECTURE.md](ARCHITECTURE.md) §4.2 and add `.gitignore` | RB-17 | T-002 | `.gitignore` covers `.terraform/`, `*.tfstate*`, `tfplan`, `*.zip`, `terraform.tfvars`, `__pycache__/`, `.venv/`, `.env*`, `tests/ai_eval/results/` | Done |
+| T-102 | Dev tooling: Python 3.12 pin, `requirements-dev.txt` (`pytest`, `pytest-cov`, `ruff`), `pyproject.toml` config | NFR-008, RB-01 | T-101 | `ruff check`, `ruff format --check` and `pytest` run locally; commands in [AGENTS.md](../AGENTS.md) §6 change from Proposed to Verified | Done |
+| T-103 | Terraform skeleton: `versions.tf` and `providers.tf` with pinned versions, `variables.tf` from [DEPLOYMENT.md](DEPLOYMENT.md) §4 | FR-012, OQ-07 | T-101 | `terraform validate` passes; `.terraform.lock.hcl` committed | Done (constraint `~> 5.0` from brief; OQ-07 still open) |
+| T-104 | CI workflow `ci.yml`: lint, tests on 3.12, Terraform fmt/validate, checkov | §9 quality gates in [TESTING_STRATEGY.md](TESTING_STRATEGY.md) | T-102, T-103 | Workflow green on a PR; actions pinned to SHAs | In progress (awaiting first run on a PR) |
+
+**M1 notes:**
+
+- M1 started before T-002 (owner review), at the maintainer's request. OQ-02, OQ-07, OQ-08 and OQ-11 remain open; none blocked the skeleton.
+- T-101 created the package (`src/mergeguard/__init__.py`) and the test directories only. Each feature module in §4.2 is created by the task that implements it, so no placeholder modules exist.
 
 ## M2 — Core pipeline (no AI)
 

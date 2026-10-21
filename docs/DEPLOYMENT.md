@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — **procedure not yet executed**; Terraform and code do not exist yet (task T-401) |
+| Status | Draft v0.1 — **procedure not yet executed**; only the Terraform skeleton exists (T-103); resources and code come in T-401 and M2–M3 |
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) §14 · [Security](SECURITY.md) §6 · [Testing](TESTING_STRATEGY.md) §7 |
 
@@ -23,7 +23,7 @@ In Phase 1 the sandbox stack may also serve the maintainer's real repositories, 
 | --- | --- |
 | AWS account and IAM principal | Permissions to manage IAM roles and policies, Lambda, API Gateway v2, CloudWatch Logs, and SSM parameters. Check with `aws sts get-caller-identity` |
 | AWS CLI | v2 recommended. Credentials configured for the target account |
-| Terraform | Version constraint pinned in `terraform/versions.tf` (TBD in T-103). `>= 1.5` is the working assumption |
+| Terraform | `>= 1.5, < 2.0` (`terraform/versions.tf`). CI uses 1.16.5 |
 | GitHub | Admin rights on each target repository (to add a webhook) |
 | Google AI Studio account | To create a Gemini API key; tier per [OQ-05](PRD.md#17-open-questions) |
 | Python 3.12 | Only for development and tests |
@@ -76,7 +76,7 @@ To update an existing value, add `--overwrite`. **Never** print values back with
 
 ## 4. Terraform configuration
 
-All variables are Proposed. Defaults reproduce the brief.
+These variables are declared in `terraform/variables.tf` (T-103), with validation for the limits stated below. They are wired to resources in T-401. Defaults reproduce the brief.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -134,7 +134,7 @@ aws logs tail /aws/lambda/mergeguard-ai-pr-reviewer --follow --region us-east-1
 
 | Item | Design |
 | --- | --- |
-| `ci.yml` | On every PR: `ruff`, `pytest` (Python 3.12), Terraform `fmt`/`validate`, `checkov` |
+| `ci.yml` | Added in M1 (T-104); runs on every PR and push to `main`: `ruff`, `pytest` with coverage gate (Python 3.12), Terraform `fmt`/`validate`, `checkov` |
 | `deploy.yml` | On merge to `main` or manual dispatch; GitHub environment `production` with required approval; `terraform plan`, then `apply` of that plan |
 | AWS credentials in CI | GitHub OIDC → dedicated IAM deploy role restricted to this repository and branch. No long-lived access keys in GitHub secrets |
 | Actions supply chain | Third-party actions pinned to full commit SHAs |

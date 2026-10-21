@@ -13,7 +13,7 @@ Infrastructure is Terraform. Read [docs/PRD.md](docs/PRD.md) and [docs/ARCHITECT
 
 ## 2. Current state
 
-As of 2026-10-21 the repository contains **documentation only**. There is no source code, Terraform, test suite, or CI yet. The first implementation work is milestone M1 in [docs/TASKS.md](docs/TASKS.md). Do not describe features as implemented until code and tests exist.
+As of 2026-10-21 the repository contains the documentation plus the **M1 foundation**: an empty `mergeguard` package, dev tooling, scaffold tests, a Terraform skeleton (versions, providers, variables; no resources), and a CI workflow. **No product feature is implemented yet**; the next work is milestone M2 in [docs/TASKS.md](docs/TASKS.md). Do not describe features as implemented until code and tests exist.
 
 ## 3. Orientation and directory ownership
 
@@ -21,11 +21,12 @@ As of 2026-10-21 the repository contains **documentation only**. There is no sou
 | --- | --- | --- |
 | `docs/` | Product, architecture, security, AI, testing, deployment documentation; ADRs in `docs/ADR/` | Exists |
 | `AGENTS.md`, `CONTRIBUTING.md`, `CONTRIBUTORS.md`, `README.md` | Repository-level guides | Exist |
-| `src/lambda_function.py` | Lambda entry point (`lambda_function.lambda_handler`) | Planned |
-| `src/mergeguard/` | Application modules ([ARCHITECTURE.md](docs/ARCHITECTURE.md) §4.2) | Planned |
-| `tests/` | Unit, contract, integration tests, fixtures, AI evaluation set | Planned |
-| `terraform/` | All AWS infrastructure | Planned |
-| `.github/workflows/` | CI (and later deploy) workflows | Planned |
+| `pyproject.toml`, `requirements-dev.txt`, `.python-version` | Python tool configuration and the 3.12 pin | Exists (M1) |
+| `src/lambda_function.py` | Lambda entry point (`lambda_function.lambda_handler`) | Planned (T-201) |
+| `src/mergeguard/` | Application modules ([ARCHITECTURE.md](docs/ARCHITECTURE.md) §4.2) | Package skeleton only (M1); modules Planned |
+| `tests/` | Unit, contract, integration tests, fixtures, AI evaluation set | Scaffold tests exist (M1) |
+| `terraform/` | All AWS infrastructure | Skeleton exists (M1); resources Planned (T-401) |
+| `.github/workflows/` | CI (and later deploy) workflows | `ci.yml` exists (M1); deploy Planned |
 
 The maintainer and sole code owner is [@ChamathDilshanC](https://github.com/ChamathDilshanC).
 
@@ -68,21 +69,21 @@ The original project brief is summarised in [docs/PRD.md](docs/PRD.md) §2. Its 
 
 ## 6. Commands
 
-No command below has been verified yet, because no code or tooling exists. Task T-102 makes them real; update this table when it lands.
+Run the Python commands inside a Python 3.12 virtual environment, created with `py -3.12 -m venv .venv` on Windows or `python3.12 -m venv .venv` elsewhere, then activated. "Verified" means the command was run successfully during M1. CI (`.github/workflows/ci.yml`) runs the same commands.
 
 | Purpose | Command | Status |
 | --- | --- | --- |
-| Install dev tools | `python -m pip install -r requirements-dev.txt` | Proposed |
-| Lint | `ruff check .` | Proposed |
-| Format check | `ruff format --check .` | Proposed |
-| Tests | `python -m pytest` | Proposed |
-| Coverage | `python -m pytest --cov=src --cov-report=term-missing` | Proposed |
-| Type check | TBD — decide in T-102 whether to adopt `mypy` | TBD |
-| Terraform format | `terraform -chdir=terraform fmt -check -recursive` | Proposed |
-| Terraform validate | `terraform -chdir=terraform init -backend=false` then `terraform -chdir=terraform validate` | Proposed |
-| Terraform policy scan | `checkov -d terraform` | Proposed |
-| Build package | Built by Terraform `archive_file`; no separate build step | Proposed |
-| Deploy | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §5 — **maintainer only** | Proposed |
+| Install dev tools | `python -m pip install -r requirements-dev.txt` | Verified (M1) |
+| Lint | `ruff check .` | Verified (M1) |
+| Format check | `ruff format --check .` | Verified (M1) |
+| Tests | `python -m pytest` | Verified (M1) |
+| Coverage (gate: 85%) | `python -m pytest --cov=src --cov-report=term-missing` | Verified (M1) |
+| Type check | Not adopted in M1 (T-102): ruff `ANN` rules enforce type hints; revisit `mypy` once M2 code exists | Decided (T-102) |
+| Terraform format | `terraform -chdir=terraform fmt -check -recursive` | Verified (M1, Terraform 1.16.5) |
+| Terraform validate | `terraform -chdir=terraform init -backend=false` then `terraform -chdir=terraform validate` | Verified (M1, Terraform 1.16.5) |
+| Terraform policy scan | `checkov -d terraform` | In CI (checkov 3.3.26); not yet run |
+| Build package | Built by Terraform `archive_file`; no separate build step | Planned (T-401) |
+| Deploy | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §5 — **maintainer only** | Planned |
 
 ## 7. Making changes
 
@@ -135,7 +136,7 @@ Update docs **in the same PR** as the behaviour change:
 ## 10. Dependency and API change rules
 
 - Adding a runtime dependency requires a new ADR that supersedes [ADR-0002](docs/ADR/0002-zero-runtime-dependencies.md). Without one, do not add it.
-- Dev dependencies need a one-line justification in the PR and a pinned version.
+- Dev dependencies, CI tools, and actions need a one-line justification in the PR and an exact pin (actions: full commit SHA). Prefer releases at least 14 days old.
 - Changing the webhook response contract, the review marker `mergeguard:v1`, scanner rule IDs, or the AI output schema is a **contract change**. Version it ([docs/API_SPEC.md](docs/API_SPEC.md) §7) and update the tests.
 - Changing Terraform provider major versions needs a plan review and a note in the PR.
 

@@ -1,0 +1,37 @@
+[project]
+name = "mergeguard-ai"
+version = "0.1.0"
+description = "Serverless DevSecOps pull-request reviewer for GitHub (AWS Lambda + Gemini)."
+readme = "README.md"
+authors = [{ name = "ChamathDilshanC" }]
+# Python 3.12 is the Lambda runtime (docs/ARCHITECTURE.md section 3); keep in sync with .python-version.
+requires-python = "==3.12.*"
+# Zero runtime dependencies beyond the stdlib and the runtime-bundled boto3 (ADR-0002).
+dependencies = []
+
+[tool.ruff]
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E/W/F: pycodestyle + pyflakes; I: import order; B: bugbear; UP: pyupgrade;
+# S: bandit security rules; ANN: type hints (AGENTS.md section 5).
+select = ["E", "W", "F", "I", "B", "UP", "S", "ANN"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "ANN"]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+# NFR-009 gate; enforced whenever pytest runs with --cov.
+fail_under = 85
+show_missing = true
