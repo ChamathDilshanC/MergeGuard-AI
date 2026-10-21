@@ -109,6 +109,35 @@ def added_lines(patch: str) -> Iterator[tuple[int, str]]:
         yield line, rows[index][1:]
 
 
+def visible_lines(patch: str) -> frozenset[int]:
+    """New-file line numbers that the patch shows: the added lines and the context
+    lines. GitHub accepts an inline comment on exactly these lines (FR-021). A
+    line withheld from the AI (ADR-0008) is not counted, so nothing is anchored to
+    a line whose content the model never saw."""
+    lines: set[int] = set()
+    new_line = 1
+    in_hunk = False
+    for raw in patch.split("\n"):
+        hunk = _HUNK_RE.match(raw)
+        if hunk:
+            new_line = int(hunk.group(1))
+            in_hunk = True
+        elif not in_hunk:
+            continue  # file headers
+        elif raw.startswith("+"):
+            if raw != WITHHELD_LINE:
+                lines.add(new_line)
+            new_line += 1
+        elif raw.startswith(("-", "\\")):
+            continue
+        elif raw.startswith(" "):
+            lines.add(new_line)
+            new_line += 1
+        else:
+            new_line += 1  # an empty artefact row: count it, do not anchor to it
+    return frozenset(lines)
+
+
 def scan_patch(filename: str, patch: str) -> list[SecretFinding]:
     return [
         SecretFinding(rule_id, filename, line)

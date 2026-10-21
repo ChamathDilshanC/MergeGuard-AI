@@ -19,11 +19,14 @@ from urllib.parse import quote
 from mergeguard.config import ConfigError
 from mergeguard.github_client import USER_AGENT
 from mergeguard.http import HttpResponse, Transport, TransportError
-from mergeguard.models import AIReview, ChangedFile, DiffBundle
+from mergeguard.models import AIFinding, AIReview, ChangedFile, DiffBundle
 from mergeguard.prompts import (
-    RESPONSE_SCHEMA,
-    SYSTEM_INSTRUCTION,
+    MAX_FINDINGS,
+    PROMPT_VERSION,
+    PROMPT_VERSION_FINDINGS,
     format_file,
+    response_schema,
+    system_instruction,
     user_content,
 )
 
@@ -37,6 +40,8 @@ MIN_TIMEOUT_SECONDS = 3.0
 POSTING_RESERVE_SECONDS = 5.0
 RISK_LEVELS = frozenset({"LOW", "MEDIUM", "HIGH"})
 MAX_BUGS = 1000
+MAX_FINDING_FILE_CHARS = 500
+MAX_FINDING_MESSAGE_CHARS = 1000
 MAX_BOUNDARY_ATTEMPTS = 10
 
 _HUNK_START_RE = re.compile(r"(?m)^(?=@@ )")
@@ -77,7 +82,12 @@ class GeminiReviewer:
         time_left: Callable[[], float | None] = _no_deadline,
         boundary: Callable[[], str] = _random_boundary,
         clock: Callable[[], float] = time.monotonic,
+        findings: bool = False,
     ) -> None:
+        # With findings the model is also asked for per-line findings
+        # (prompt review-v2, FR-021); without, the evaluated review-v1 is sent.
+        self._findings = findings
+        self.prompt_version = PROMPT_VERSION_FINDINGS if findings else PROMPT_VERSION
         self._api_key = api_key
         self._transport = transport
         self.model = model
@@ -104,7 +114,9 @@ class GeminiReviewer:
             key = self._api_key()  # read from SSM only now, when it is needed
         except ConfigError as exc:
             raise AIReviewFailure("not_configured") from exc
-        payload = build_request(bundle.text, self._unique_boundary(bundle.text))
+        payload = build_request(
+            bundle.text, self._unique_boundary(bundle.text), self._findings
+        )
         url = GEMINI_URL.format(model=quote(self.model, safe=""))
         headers = {
             "Content-Type": "application/json",
@@ -119,7 +131,7 @@ class GeminiReviewer:
             reason = "timeout" if exc.kind == "timeout" else "unavailable"
             raise AIReviewFailure(reason) from exc
         _raise_for_status(response)
-        return parse_review(response.body, self.model)
+        return parse_review(response.body, self.model, self._findings)
 
     def _timeout(self) -> float:
         """Derive the timeout from the Lambda deadline, keeping time to post."""
@@ -140,16 +152,18 @@ class GeminiReviewer:
         raise AIReviewFailure("unavailable")
 
 
-def build_request(diff_text: str, boundary: str) -> dict[str, Any]:
+def build_request(
+    diff_text: str, boundary: str, findings: bool = False
+) -> dict[str, Any]:
     """The generateContent body (docs/API_SPEC.md section 4). No tools."""
     return {
-        "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+        "systemInstruction": {"parts": [{"text": system_instruction(findings)}]},
         "contents": [
             {"role": "user", "parts": [{"text": user_content(diff_text, boundary)}]}
         ],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "responseSchema": RESPONSE_SCHEMA,
+            "responseSchema": response_schema(findings),
             "temperature": TEMPERATURE,
         },
     }
@@ -209,7 +223,7 @@ def _partial_section(filename: str, patch: str, max_chars: int) -> str:
     return format_file(filename, kept) if has_code else ""
 
 
-def parse_review(body: bytes, model: str) -> AIReview:
+def parse_review(body: bytes, model: str, findings: bool = False) -> AIReview:
     """Extract and strictly validate the review (AI_SYSTEM.md sections 5, 8)."""
     data = _loads(body)
     if not isinstance(data, dict):
@@ -236,10 +250,10 @@ def parse_review(body: bytes, model: str) -> AIReview:
         and isinstance(part.get("text"), str)
         and not part.get("thought")
     )
-    return validate_review(_loads(text), model)
+    return validate_review(_loads(text), model, findings)
 
 
-def validate_review(value: object, model: str) -> AIReview:
+def validate_review(value: object, model: str, findings: bool = False) -> AIReview:
     if not isinstance(value, dict):
         raise AIReviewFailure("invalid_output")
     risk = value.get("risk_level")
@@ -256,7 +270,41 @@ def validate_review(value: object, model: str) -> AIReview:
     )
     if not valid:
         raise AIReviewFailure("invalid_output")
-    return AIReview(risk.strip(), bugs, summary, feedback, model)
+    return AIReview(
+        risk.strip(),
+        bugs,
+        summary,
+        feedback,
+        model,
+        _findings(value.get("findings")) if findings else (),
+    )
+
+
+def _findings(value: object) -> tuple[AIFinding, ...]:
+    """Per-line findings are a bonus: a malformed item is dropped, never a reason
+    to discard the review. Whether a line exists in the diff is checked later,
+    against the diff that was actually sent."""
+    if not isinstance(value, list):
+        return ()
+    found: list[AIFinding] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        file, line, message = item.get("file"), item.get("line"), item.get("message")
+        if (
+            isinstance(file, str)
+            and 0 < len(file) <= MAX_FINDING_FILE_CHARS
+            and type(line) is int
+            and line >= 1
+            and isinstance(message, str)
+            and message.strip()
+        ):
+            found.append(
+                AIFinding(file, line, message.strip()[:MAX_FINDING_MESSAGE_CHARS])
+            )
+        if len(found) == MAX_FINDINGS:
+            break
+    return tuple(found)
 
 
 def _raise_for_status(response: HttpResponse) -> None:

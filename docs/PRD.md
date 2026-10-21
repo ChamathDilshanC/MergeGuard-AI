@@ -9,7 +9,7 @@
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) · [API spec](API_SPEC.md) · [Security](SECURITY.md) · [Tasks](TASKS.md) |
 
-> **Implementation status:** M1 (skeleton, tooling, CI), M2 (webhook pipeline) and M3 (Gemini review, tested with mocked responses only) are implemented. The M4 Terraform stack is written and plan-tested but has never been applied. M5 (Phase 2: receiver/worker split with a queue, commit status, stale-review dismissal, scanner suppressions, alarms and budget, and a CI deploy workflow) is implemented and tested with fakes. The AI evaluation (T-304) and any deployment do not exist yet. Section 7 shows the status of each capability — see the [status legend](README.md#status-legend).
+> **Implementation status:** M1 (skeleton, tooling, CI), M2 (webhook pipeline) and M3 (Gemini review, tested with mocked responses only) are implemented. The M4 Terraform stack is written and plan-tested but has never been applied. M5 (Phase 2: receiver/worker split with a queue, commit status, stale-review dismissal, scanner suppressions, alarms and budget, and a CI deploy workflow) and M6 (Phase 3: GitHub App authentication, inline comments, per-repository configuration) are implemented and tested with fakes. The AI evaluation (T-304) and any deployment do not exist yet. Section 7 shows the status of each capability — see the [status legend](README.md#status-legend).
 
 ---
 
@@ -111,9 +111,9 @@ Status as of M2: "Verified (M2 tests)" means implemented and covered by the auto
 | Commit status check | Verified (M5 tests; not deployed) | 2 | FR-017 |
 | Stale review dismissal | Verified (M5 tests; not deployed) | 2 | FR-018 |
 | Scanner suppressions | Verified (M5 tests; [ADR-0008](ADR/0008-scanner-suppressions-are-visible-and-withheld-from-ai.md)) | 2 | FR-019 |
-| GitHub App authentication | Proposed | 3 | FR-020 |
-| Inline line-level comments | Proposed | 3 | FR-021 |
-| Per-repository configuration | Proposed | 3 | FR-022 |
+| GitHub App authentication | Verified (M6 tests with fakes, signer cross-checked with OpenSSL; not deployed) | 3 | FR-020 |
+| Inline line-level comments | Verified for secret findings (M6 tests); AI findings Verified by tests but **opt-in and unevaluated** (T-304, OQ-05) | 3 | FR-021 |
+| Per-repository configuration | Verified (M6 tests; [ADR-0011](ADR/0011-repository-config-from-the-base-commit.md)) | 3 | FR-022 |
 
 ## 8. MVP scope
 
@@ -383,24 +383,31 @@ The policy is evaluated in code, never by the model:
 
 ### FR-020 — GitHub App authentication
 
-**Priority:** P2 · **Phase:** 3 · **Status:** Proposed ([ADR-0006](ADR/0006-github-identity-pat-then-app.md))
+**Priority:** P2 · **Phase:** 3 · **Status:** Verified in code and tests (M6); not deployed ([ADR-0006](ADR/0006-github-identity-pat-then-app.md), [ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md))
 
 *Acceptance criteria:*
 
 1. The bot authenticates with short-lived installation tokens and appears as `<app-name>[bot]`. This removes the own-PR `422` limitation and enables the Checks API.
 2. Multiple repositories are served through one installation.
+3. *(M6)* Each installation token is minted for **one repository** with only the permissions in use, and cached until shortly before it expires. The private key is a fourth SSM SecureString that only the worker can read; in App mode the personal access token is never read.
+4. *(M6)* Reviews are matched to the bot account (`<slug>[bot]`) for the duplicate check and for dismissals (TM-14), because an installation token cannot call `GET /user`.
+5. *(M6)* The Checks API is **not** used; the commit status of FR-017 remains the signal. The personal access token stays the default when no App ID is configured.
 
 ### FR-021 — Inline line-level comments
 
-**Priority:** P2 · **Phase:** 3 · **Status:** Proposed
+**Priority:** P2 · **Phase:** 3 · **Status:** Verified in code and tests (M6) for secret findings; AI findings are opt-in and their prompt is unevaluated (T-304 is blocked on OQ-05)
 
 *Acceptance criteria:*
 
 1. Secret findings and AI findings that carry a file and line are posted as review comments anchored to the changed line, in addition to the summary.
+2. *(M6)* A comment is anchored **only to a line that is present in the diff** (added or context lines). For AI findings, only to a line of the diff that was actually sent to the model, never to a line withheld from it (ADR-0008). Other findings are dropped.
+3. *(M6)* A secret comment names the rule and the remediation and never the value. AI comment text is sanitised like the rest of the model's output. At most 25 secret comments and 10 AI comments are posted; the summary review still lists every finding.
+4. *(M6)* The mode is `MERGEGUARD_INLINE_COMMENTS`: `off` (code default), `secrets` (Terraform default) or `all`. Only `all` asks the model for per-line findings, with the longer prompt `review-v2`; the default keeps the evaluated `review-v1`. A repository may only lower the mode.
+5. *(M6)* The comments are sent with the review. If GitHub refuses them (`422`), the review is posted again **without** them and keeps its verdict; only if it is still refused does the own-PR fallback to a comment apply (FR-010).
 
 ### FR-022 — Per-repository configuration
 
-**Priority:** P2 · **Phase:** 3 · **Status:** Proposed
+**Priority:** P2 · **Phase:** 3 · **Status:** Verified in code and tests (M6); not deployed ([ADR-0011](ADR/0011-repository-config-from-the-base-commit.md))
 
 *Acceptance criteria:*
 
@@ -408,6 +415,9 @@ The policy is evaluated in code, never by the model:
    - blocking thresholds;
    - ignored paths;
    - comment language.
+2. *(M6)* The file is read from the pull request's **base commit**, never its head, so a PR cannot change the rules that apply to it.
+3. *(M6)* Keys: `version` (1), `block_on` (`MEDIUM` or `HIGH`, within the operator's `repo_config_block_levels`), `ai_review` (false keeps the diff from the AI), `ignore_paths` (globs kept from the AI), `inline_comments` (`off`, `secrets`, `all`, never above the operator's mode) and `language` (`en` only until OQ-03 is decided). `block_on` relaxes only the AI risk-level threshold: AI bugs and secret findings still block.
+4. *(M6)* The file can never disable the secret scan or add suppressions. An unknown key, bad type, value outside the bounds, unsupported version, invalid JSON or a file over 16 KB makes the **whole file** ignored: the defaults apply and the review carries a notice with a reason category. A file that is applied is listed in the review. A missing file, or a token that cannot read contents, simply means the defaults.
 
 ## 10. Roles and permission boundaries
 
@@ -544,7 +554,7 @@ All targets are **Proposed** until the owner confirms them.
 | 0 — Documentation | Shared understanding before code | This documentation suite | Owner reviews docs and answers M1 open questions |
 | 1 — MVP | Brief parity with its defects fixed | FR-001 to FR-015; milestones M1–M4 in [TASKS.md](TASKS.md) | §8 scenarios pass on a deployed stack |
 | 2 — Reliability and signal | Fast acknowledgement, mergeable status, less noise | FR-016 to FR-019, remote state, CI/CD deploy, alarms and budget; milestone M5 in [TASKS.md](TASKS.md), implemented and tested with fakes | SM-2 met on a deployed stack; stale reviews no longer block |
-| 3 — Distribution | Multi-repo use with a proper bot identity | FR-020 to FR-022 | Installed on at least two repositories via a GitHub App |
+| 3 — Distribution | Multi-repo use with a proper bot identity | FR-020 to FR-022; milestone M6 in [TASKS.md](TASKS.md), implemented and tested with fakes | Installed on at least two repositories via a GitHub App (needs a deployment, T-402) |
 
 ## 19. Traceability
 
@@ -569,6 +579,6 @@ All targets are **Proposed** until the owner confirms them.
 | FR-017 | §15 | — | T-502 | Contract + integration |
 | FR-018 | §15 | — | T-503 | Contract + integration |
 | FR-019 | §5 scanner | 0004, 0008 | T-504 | Scanner corpus + integration |
-| FR-020 | §15 | 0006 | T-601 | Contract |
-| FR-021 | §15 | — | T-602 | Contract |
-| FR-022 | §15 | 0002 | T-603 | Unit |
+| FR-020 | §15 | 0006, 0010 | T-601 | Unit (signer, tokens) + integration |
+| FR-021 | §15 | — | T-602 | Unit + integration |
+| FR-022 | §15 | 0002, 0011 | T-603 | Unit + integration |

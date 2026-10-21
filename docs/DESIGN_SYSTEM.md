@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — templates (§5), sanitisation, log conventions (§7) and rule IDs (§8) implemented in M2–M3 and snapshot-tested; the commit status (§5.6), `N-SUPPRESSED`, the queue and worker log events and the Phase 2 resource names implemented in M5 and tested with fakes. Nothing is deployed |
+| Status | Draft v0.1 — templates (§5), sanitisation, log conventions (§7) and rule IDs (§8) implemented in M2–M3 and snapshot-tested; the commit status (§5.6), `N-SUPPRESSED`, the queue and worker log events and the Phase 2 resource names in M5; inline comments (§5.6.2), `N-CONFIG`, `N-CONFIG-INVALID` and their log events in M6. All tested with fakes. Nothing is deployed |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) · [API spec](API_SPEC.md) · [AI system](AI_SYSTEM.md) |
 
@@ -30,7 +30,7 @@ This design system therefore defines content, structure, and interface conventio
 | --- | --- | --- | --- | --- |
 | S1 | PR review (summary comment) | PR author, reviewer | 1 | §5 |
 | S2 | Commit status `mergeguard/review` | PR author, branch protection | 2 (implemented M5, not deployed) | §5.6 |
-| S3 | Inline review comments | PR author | 3 | FR-021 (template TBD in Phase 3) |
+| S3 | Inline review comments | PR author | 3 (implemented M6, not deployed) | §5.6.2 |
 | S4 | Webhook HTTP responses (visible in GitHub *Recent Deliveries*) | Repository admin | 1 | §6 |
 | S5 | Structured logs | Operator | 1 | §7 |
 | S6 | Terraform outputs and resource names | Operator | 1 | §8 |
@@ -159,6 +159,8 @@ No credentials were detected in the added lines. The AI review could not be comp
 | `N-PARTIAL-FILES` | File cap reached | `> [!NOTE]` + "Only the first <n> changed files were checked." |
 | `N-NO-PATCH` | Some files had no patch | `> [!NOTE]` + "Not reviewed (binary or too large): `<files>`." |
 | `N-SUPPRESSED` | One or more findings were suppressed (FR-019) | `> [!NOTE]` + "<n> finding(s) suppressed by `mergeguard:ignore-secret` or path allow-list. These lines were not sent to the AI.", then one `> - <rule label>: `<file>` line <n> (inline marker \| path allow-list)` bullet per suppression, at most 25, then "…and <n> more." |
+| `N-CONFIG` | A valid repository configuration changed a setting (FR-022) | `> [!NOTE]` + "Repository configuration `.github/mergeguard.json` applied: `block_on=HIGH`, `ai_review=off`, `ignore_paths=2 pattern(s)`, `inline_comments=secrets`." (only the settings that were set) |
+| `N-CONFIG-INVALID` | The file exists but is invalid or outside the bounds | `> [!NOTE]` + "The repository configuration `.github/mergeguard.json` was ignored (<reason>), so the default settings apply." `<reason>` is `invalid_json`, `too_large`, `unknown_key`, `unsupported_version`, `invalid_field` or `out_of_bounds`; anything else renders as `unknown`. Never file content |
 
 ### 5.5 `T-FALLBACK` — own-PR note (FR-010)
 
@@ -189,6 +191,21 @@ Context `mergeguard/review`, set on the head SHA. Off unless `MERGEGUARD_COMMIT_
 ### 5.6.1 Dismissal message (FR-018)
 
 When a later review of the same pull request has no blocking result, each earlier `REQUEST_CHANGES` review of MergeGuard is dismissed. If that later review is *AI review unavailable* (`T-AIU`), only earlier `T-SEC` reviews are dismissed and an earlier `T-AI` block stays. The message is: "MergeGuard AI: superseded by the review of commit `<short-sha>`, which found no blocking issues. See the latest MergeGuard review."
+
+### 5.6.2 Inline comments (Phase 3, FR-021)
+
+Posted with the review, anchored to a line of the diff on the right side. One comment per line.
+
+- **Secret finding** (`T-SEC`):
+
+  ```markdown
+  🚨 **Possible credential: AWS access key ID, GitHub token.** Revoke or rotate it at its provider first: it is already visible in this branch's history. Then load it from AWS SSM Parameter Store or an environment variable.
+  ```
+
+  It names each rule that matched the line and never the value. At most 25 per review.
+- **AI finding** (`T-AI`, mode `all` only): `🤖 <message>` where the message is sanitised like all model text (§5.7). Several findings on one line are joined by a blank line. At most 10 per review.
+- A comment is never anchored to a line outside the diff, nor to a line that was withheld from the AI.
+- The summary review remains the source of truth and lists every finding; if GitHub refuses the comments, the review is posted without them.
 
 ### 5.7 Sanitisation of model output
 
@@ -234,12 +251,14 @@ One JSON object per line. Field names are `snake_case`.
 | `commit_state` | string | `status.set` | `failure` |
 | `suppressed` | integer | `scan.completed` | `1` |
 | `dismissed` | integer | `review.dismissed` | `2` |
+| `inline_comments` | integer | `review.posted` | `3` |
+| `config_keys` | integer | `repo_config.applied` | `2` |
 
 **Event names:**
 
 - **Webhook:** `webhook.received`, `webhook.rejected`, `webhook.ignored`, `webhook.completed`, `config.failed`.
-- **Pipeline:** `files.fetched`, `scan.completed` (with `rule_ids` and `suppressed`), `review.posted`, `review.fallback_comment`, `review.skipped` (reasons include `no_patches`, `stale_head`, `pr_closed`), `review.duplicate`, `review.dry_run`.
-- **Signals:** `status.set` (with `commit_state`), `status.failed` (WARNING, with `reason` and `http_status`), `review.dismissed` (with `dismissed`), `review.dismissal_failed` (WARNING).
+- **Pipeline:** `files.fetched`, `scan.completed` (with `rule_ids` and `suppressed`), `review.posted` (with `inline_comments`), `review.fallback_comment`, `review.skipped` (reasons include `no_patches`, `stale_head`, `pr_closed`), `review.duplicate`, `review.dry_run`.
+- **Signals:** `status.set` (with `commit_state`), `status.failed` (WARNING, with `reason` and `http_status`), `review.dismissed` (with `dismissed`), `review.dismissal_failed` (WARNING), `review.inline_dropped` (GitHub refused the inline comments; the review was posted without them), `repo_config.applied` (with `config_keys`), `repo_config.invalid` (WARNING, with `reason` as a category, never content).
 - **Queue and worker:** `queue.enqueued` (receiver), `queue.failed` (receiver, ERROR), `worker.received`, `worker.completed` (with `status`, `reason`, `duration_ms`), `worker.rejected` (ERROR, `reason` `malformed_message`).
 - **GitHub errors:** `github.auth_failed`, `github.forbidden`, `github.invalid_request`, `github.rate_limited`, `github.unavailable`, `github.unexpected`.
 - **AI:** `ai.completed` (INFO, with `risk_level`, `model`, `prompt_version`, `duration_ms`) and `ai.failed` (WARNING, with `reason` instead of `risk_level`).

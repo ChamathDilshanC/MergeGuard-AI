@@ -10,7 +10,7 @@ the redrive limit, moves it to the dead-letter queue, where an alarm raises it.
 
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from typing import Any, TextIO
 
 from mergeguard.config import ConfigError, SecretStore, Settings
@@ -18,9 +18,10 @@ from mergeguard.github_client import GitHubError
 from mergeguard.http import Transport, urllib_transport
 from mergeguard.logging_util import JsonLogger
 from mergeguard.review_queue import InvalidMessage, parse_message
-from mergeguard.runtime import build_pipeline
+from mergeguard.runtime import build_pipeline, github_identity
 
 _secret_store: SecretStore | None = None
+_app_cache: dict[Any, Any] = {}  # installation tokens, per execution environment
 
 
 def lambda_handler(event: Mapping[str, Any], context: Any) -> dict[str, Any]:
@@ -30,6 +31,7 @@ def lambda_handler(event: Mapping[str, Any], context: Any) -> dict[str, Any]:
         environ=os.environ,
         secrets=_cached_secret_store,
         transport=urllib_transport,
+        app_cache=_app_cache,
     )
 
 
@@ -51,6 +53,7 @@ def handle(
     transport: Transport,
     stream: TextIO | None = None,
     clock: Callable[[], float] = time.monotonic,
+    app_cache: MutableMapping[Any, Any] | None = None,
 ) -> dict[str, Any]:
     records = event.get("Records")
     records = [item for item in records if isinstance(item, dict)] if records else []
@@ -64,7 +67,9 @@ def handle(
     failed = [
         record
         for record in records
-        if not _process(record, context, settings, secrets, transport, log, clock)
+        if not _process(
+            record, context, settings, secrets, transport, log, clock, app_cache
+        )
     ]
     return _failures(failed)
 
@@ -77,6 +82,7 @@ def _process(
     transport: Transport,
     log: JsonLogger,
     clock: Callable[[], float],
+    app_cache: MutableMapping[Any, Any] | None,
 ) -> bool:
     """Handle one record. True means done (delete it); False means retry."""
     started = clock()
@@ -96,9 +102,15 @@ def _process(
     log.log("worker.received")
     try:
         store = secrets(settings.param_prefix)
+        # A personal access token (fails closed, FR-011) or, in App mode, an
+        # installation token for this repository (FR-020).
+        github_token, login = github_identity(
+            settings, store, transport, pr, cache=app_cache
+        )
         pipeline = build_pipeline(
             settings,
-            github_token=store.github_token(),  # fails closed (FR-011)
+            github_token=github_token,
+            login=login,
             gemini_api_key=store.gemini_api_key,
             transport=transport,
             context=context,

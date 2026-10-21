@@ -70,18 +70,19 @@ def _utc_now() -> datetime:
 def build_message(
     delivery_id: str, action: str, pr: PullRequestRef, received_at: datetime
 ) -> str:
-    return json.dumps(
-        {
-            "schema": SCHEMA,
-            "delivery_id": delivery_id,
-            "repository": pr.repo,
-            "pull_number": pr.number,
-            "head_sha": pr.head_sha,
-            "action": action,
-            "received_at": received_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        },
-        separators=(",", ":"),
-    )
+    message: dict[str, object] = {
+        "schema": SCHEMA,
+        "delivery_id": delivery_id,
+        "repository": pr.repo,
+        "pull_number": pr.number,
+        "head_sha": pr.head_sha,
+        "action": action,
+        "received_at": received_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if pr.installation_id is not None:
+        # Optional field of v1 (FR-020): absent for personal-token deployments.
+        message["installation_id"] = pr.installation_id
+    return json.dumps(message, separators=(",", ":"))
 
 
 def parse_message(body: object) -> ReviewRequest:
@@ -103,6 +104,10 @@ def parse_message(body: object) -> ReviewRequest:
         and is_valid_repo(data.get("repository"))
         and is_valid_pull_number(data.get("pull_number"))
         and is_valid_sha(data.get("head_sha"))
+        and (
+            "installation_id" not in data
+            or is_valid_pull_number(data["installation_id"])
+        )
     )
     if not valid:
         raise InvalidMessage("invalid fields")
@@ -113,6 +118,7 @@ def parse_message(body: object) -> ReviewRequest:
             repo=data["repository"],
             number=data["pull_number"],
             head_sha=data["head_sha"],
+            installation_id=data.get("installation_id"),
         ),
     )
 

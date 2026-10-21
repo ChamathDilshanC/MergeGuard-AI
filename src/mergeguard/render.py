@@ -38,6 +38,7 @@ STATUS_BLOCKED_AI = ("failure", "Changes requested by AI review — see review")
 STATUS_CLEAR = ("success", "No blocking issues found")
 STATUS_ERROR = ("error", "MergeGuard could not complete the review")
 
+CONFIG_FILE = ".github/mergeguard.json"
 SUPPRESSION_VIA = {"inline": "inline marker", "path": "path allow-list"}
 FALLBACK_CALLOUT = (
     "> [!IMPORTANT]\n"
@@ -60,6 +61,8 @@ class Notices:
     files_cap: int | None = None  # N-PARTIAL-FILES
     no_patch_files: tuple[str, ...] = ()  # N-NO-PATCH
     suppressed: tuple[SuppressedFinding, ...] = ()  # N-SUPPRESSED (FR-019)
+    config_applied: tuple[str, ...] = ()  # N-CONFIG (FR-022)
+    config_invalid: str | None = None  # N-CONFIG-INVALID: a reason category
 
 
 def render_review(
@@ -198,6 +201,22 @@ def _notice_blocks(notices: Notices) -> list[str]:
         )
     if notices.suppressed:
         blocks.append(_suppressed_notice(notices.suppressed))
+    if notices.config_invalid is not None:
+        reason = (
+            notices.config_invalid
+            if _REASON_RE.fullmatch(notices.config_invalid)
+            else "unknown"
+        )
+        blocks.append(
+            f"> [!NOTE]\n> The repository configuration `{CONFIG_FILE}` was ignored "
+            f"({reason}), so the default settings apply."
+        )
+    elif notices.config_applied:
+        blocks.append(
+            f"> [!NOTE]\n> Repository configuration `{CONFIG_FILE}` applied: "
+            + ", ".join(f"`{item}`" for item in notices.config_applied)
+            + "."
+        )
     return blocks
 
 

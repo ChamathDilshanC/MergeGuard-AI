@@ -71,9 +71,10 @@ run "default_stack" {
   assert {
     condition = jsondecode(aws_iam_role_policy.worker.policy).Statement[1].Resource == [
       "arn:aws:ssm:us-east-1:123456789012:parameter/mergeguard/github_token",
+      "arn:aws:ssm:us-east-1:123456789012:parameter/mergeguard/github_app_private_key",
       "arn:aws:ssm:us-east-1:123456789012:parameter/mergeguard/gemini_api_key",
     ]
-    error_message = "The worker may read the GitHub token and the Gemini key only, never the webhook secret."
+    error_message = "The worker may read the GitHub credential (token or App key) and the Gemini key only, never the webhook secret."
   }
   assert {
     condition = jsondecode(aws_iam_role_policy.worker.policy).Statement[2].Action == [
@@ -99,7 +100,7 @@ run "default_stack" {
 
   # SSM: three SecureString placeholders, value written write-only.
   assert {
-    condition     = sort([for p in aws_ssm_parameter.secret : p.name]) == tolist(["/mergeguard/gemini_api_key", "/mergeguard/github_token", "/mergeguard/webhook_secret"])
+    condition     = sort([for p in aws_ssm_parameter.secret : p.name]) == tolist(["/mergeguard/gemini_api_key", "/mergeguard/github_app_private_key", "/mergeguard/github_token", "/mergeguard/webhook_secret"])
     error_message = "Unexpected SSM parameter names."
   }
   assert {
@@ -148,6 +149,11 @@ run "default_stack" {
       MERGEGUARD_DRY_RUN          = "false"
       MERGEGUARD_COMMIT_STATUS    = "true"
       MERGEGUARD_SCAN_ALLOW_PATHS = ""
+
+      MERGEGUARD_GITHUB_APP_ID            = ""
+      MERGEGUARD_INLINE_COMMENTS          = "secrets"
+      MERGEGUARD_REPO_CONFIG              = "true"
+      MERGEGUARD_REPO_CONFIG_BLOCK_LEVELS = "MEDIUM,HIGH"
     })
     error_message = "Worker environment differs from ARCHITECTURE.md section 10."
   }
@@ -266,7 +272,7 @@ run "custom_prefix_moves_parameters_and_iam_scope" {
     error_message = "The receiver's SSM scope must follow param_prefix."
   }
   assert {
-    condition     = jsondecode(aws_iam_role_policy.worker.policy).Statement[1].Resource == ["arn:aws:ssm:us-east-1:123456789012:parameter/team/mergeguard/github_token", "arn:aws:ssm:us-east-1:123456789012:parameter/team/mergeguard/gemini_api_key"]
+    condition     = jsondecode(aws_iam_role_policy.worker.policy).Statement[1].Resource == ["arn:aws:ssm:us-east-1:123456789012:parameter/team/mergeguard/github_token", "arn:aws:ssm:us-east-1:123456789012:parameter/team/mergeguard/github_app_private_key", "arn:aws:ssm:us-east-1:123456789012:parameter/team/mergeguard/gemini_api_key"]
     error_message = "The worker's SSM scope must follow param_prefix."
   }
   assert {
@@ -323,6 +329,35 @@ run "worker_settings_reach_the_worker_and_the_queue" {
   assert {
     condition     = !contains(keys(aws_lambda_function.reviewer.environment[0].variables), "MERGEGUARD_SCAN_ALLOW_PATHS")
     error_message = "Review settings belong to the worker, not the receiver."
+  }
+}
+
+run "phase_3_settings_reach_the_worker_only" {
+  command = plan
+
+  variables {
+    github_app_id            = "123456"
+    inline_comments          = "all"
+    repo_config_enabled      = false
+    repo_config_block_levels = ["MEDIUM"]
+  }
+
+  assert {
+    condition = (
+      aws_lambda_function.worker.environment[0].variables["MERGEGUARD_GITHUB_APP_ID"] == "123456"
+      && aws_lambda_function.worker.environment[0].variables["MERGEGUARD_INLINE_COMMENTS"] == "all"
+      && aws_lambda_function.worker.environment[0].variables["MERGEGUARD_REPO_CONFIG"] == "false"
+      && aws_lambda_function.worker.environment[0].variables["MERGEGUARD_REPO_CONFIG_BLOCK_LEVELS"] == "MEDIUM"
+    )
+    error_message = "The Phase 3 settings must reach the worker."
+  }
+  assert {
+    condition     = !contains(keys(aws_lambda_function.reviewer.environment[0].variables), "MERGEGUARD_GITHUB_APP_ID")
+    error_message = "The receiver needs no App settings: it forwards the installation ID and nothing else."
+  }
+  assert {
+    condition     = !strcontains(jsonencode(aws_iam_role_policy.lambda.policy), "github_app_private_key")
+    error_message = "The receiver must not be able to read the App's private key."
   }
 }
 
@@ -412,6 +447,36 @@ run "rejects_a_zero_receive_count" {
   }
 
   expect_failures = [var.queue_max_receive_count]
+}
+
+run "rejects_an_unknown_inline_comment_mode" {
+  command = plan
+
+  variables {
+    inline_comments = "everything"
+  }
+
+  expect_failures = [var.inline_comments]
+}
+
+run "rejects_an_empty_or_unknown_block_level_list" {
+  command = plan
+
+  variables {
+    repo_config_block_levels = ["CRITICAL"]
+  }
+
+  expect_failures = [var.repo_config_block_levels]
+}
+
+run "rejects_a_malformed_app_id" {
+  command = plan
+
+  variables {
+    github_app_id = "123 456"
+  }
+
+  expect_failures = [var.github_app_id]
 }
 
 run "rejects_a_malformed_alert_email" {

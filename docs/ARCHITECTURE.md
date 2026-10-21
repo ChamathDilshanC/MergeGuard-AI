@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — M1 to M3 implemented; M4 Terraform written and plan-tested; M5 (receiver/worker split, commit status, stale-review dismissal, suppressions, alarms and budget, CI deploy) implemented and tested with fakes; **not deployed** |
+| Status | Draft v0.1 — M1 to M3 implemented; M4 Terraform written and plan-tested; M5 (receiver/worker split, commit status, stale-review dismissal, suppressions, alarms and budget, CI deploy) and M6 (GitHub App authentication, inline comments, per-repository configuration) implemented and tested with fakes; **not deployed** |
 | Last updated | 2026-10-21 |
 | Owner | [@ChamathDilshanC](https://github.com/ChamathDilshanC) |
 | Related | [PRD](PRD.md) · [API spec](API_SPEC.md) · [Security](SECURITY.md) · [Deployment](DEPLOYMENT.md) · [ADRs](ADR/README.md) |
@@ -18,6 +18,7 @@ This document describes how MergeGuard AI is built. It covers the **Phase 1 (MVP
 - **M3** added the Gemini review after a clean scan: the versioned prompt, diff budget, strict output validation, prompt-injection defences and fail-safe fallbacks. It is tested with mocked Gemini responses only.
 - **M4** added the Terraform stack (T-401): IAM, Lambda, HTTP API, log groups and SSM placeholders. It is checked by a mocked-provider plan test and has never been applied.
 - **M5** added the Phase 2 pieces: the receiver/worker split with an SQS queue and dead-letter queue (T-501), the `mergeguard/review` commit status (T-502), dismissal of stale blocking reviews (T-503), scanner suppressions (T-504), a bootstrap stack and an OIDC deploy workflow for remote state (T-505), and alarms and a budget alert (T-506). All of it is tested with fakes and mocked providers; the deploy workflow has never run.
+- **M6** added the Phase 3 pieces: GitHub App authentication with installation tokens and a pure-Python RS256 signer (T-601, [ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md)), inline line-level comments for secret findings and, opt-in, AI findings (T-602), and per-repository configuration read from the base commit (T-603, [ADR-0011](ADR/0011-repository-config-from-the-base-commit.md)). All of it is tested with fakes; nothing is deployed.
 - **Not yet built:** the AI evaluation (T-304, blocked on OQ-05) and any deployment (T-402). Component names below come from the brief (Planned) or are recommendations (Proposed).
 
 ## 2. System context
@@ -48,6 +49,7 @@ flowchart LR
 | Logs | Amazon CloudWatch Logs, `/aws/lambda/mergeguard-ai-pr-reviewer` | Planned (brief), retention Proposed |
 | AI | Google Gemini `generateContent`, model `gemini-2.5-flash` (configurable) | Planned (brief) |
 | Source control integration | GitHub webhooks + REST API, fine-grained PAT | Planned (brief) |
+| GitHub identity | Personal access token (default), or a GitHub App: a JWT signed in pure Python (RS256) is exchanged for an installation token scoped to one repository | Token Verified (M2); App Verified by tests and an OpenSSL cross-check (M6), not deployed; [ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md) |
 | Infrastructure as code | Terraform `>= 1.11, < 2.0`; providers `hashicorp/aws` (`~> 5.0` in brief, locked at 5.100.0) and `hashicorp/archive` (`~> 2.4`, locked at 2.8.1). A separate `terraform/bootstrap/` stack holds the state bucket and the CI deploy role | Stack and bootstrap Verified by validate and mocked plan tests (M4, M5); never applied; AWS major version [OQ-07](PRD.md#17-open-questions) |
 | Async processing | Amazon SQS standard queue + dead-letter queue (SSE-SQS), one message per worker invocation | Verified by plan tests and fakes (M5), not deployed; [ADR-0005](ADR/0005-async-webhook-processing.md) |
 | Alerts | CloudWatch alarms and an SNS topic; an optional AWS Budgets alert | Verified by plan tests (M5), not deployed |
@@ -75,7 +77,7 @@ flowchart LR
 ├── src/
 │   ├── lambda_function.py     # Receiver / inline entry point (M2, M5)
 │   ├── worker_function.py     # SQS worker entry point (M5)
-│   └── mergeguard/            # Modules (M2-M5), incl. ai_reviewer, prompts, review_queue, runtime
+│   └── mergeguard/            # Modules (M2-M6), incl. ai_reviewer, prompts, review_queue, runtime, app_auth, rsa_jwt, repo_config, inline
 ├── terraform/
 │   ├── .terraform.lock.hcl
 │   ├── alerts.tf              # SNS topic, alarms, optional budget (M5)
@@ -115,6 +117,10 @@ src/
     ├── models.py              # Dataclasses (section 7)
     ├── logging_util.py        # JSON log helper with redaction
     ├── review_queue.py        # Queue message (build, validate) and the SQS sender (M5)
+    ├── app_auth.py            # GitHub App installation tokens, bot login (M6)
+    ├── rsa_jwt.py             # RS256 JWT signing with the standard library (M6)
+    ├── repo_config.py         # .github/mergeguard.json parsing and bounds (M6)
+    ├── inline.py              # Inline review comments from findings (M6)
     ├── runtime.py             # Wiring shared by both entry points: deadlines, pipeline construction (M5)
     └── pipeline.py            # One review: files, duplicate check, scan, decision, post, status, dismissals
 tests/
@@ -140,6 +146,10 @@ Terraform packages the code with `archive_file` using `source_dir = "../src"` in
 | `worker_function` (handler) | The **worker**: for each SQS record it validates the message and runs the pipeline, and reports the records that failed | Reads the token and the Gemini key, never the webhook secret; a finished record is deleted, a failed one is retried and then dead-lettered |
 | `review_queue` | The message schema (`mergeguard.review-request.v1`), strict validation, and the SQS sender with short timeouts | Metadata only; a send failure carries no AWS error text |
 | `runtime` | Remaining-time helpers and the construction of the GitHub client, reviewer and pipeline from settings | Shared by both entry points, so inline and worker runs behave alike |
+| `app_auth` | Mints an installation token for one repository with minimal permissions, caches it until five minutes before it expires, and resolves the bot login from the App's slug | Used only when `MERGEGUARD_GITHUB_APP_ID` is set; never logs a token, JWT or key |
+| `rsa_jwt` | Reads an unencrypted PKCS#1 or PKCS#8 RSA key and signs RS256 JWTs with `pow()` | Blinded private-key operation, signature verified before release, strict DER, 2048 to 8192 bits ([ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md)) |
+| `repo_config` | Parses and validates `.github/mergeguard.json` against the operator's bounds | Pure function; all or nothing; reason categories only ([ADR-0011](ADR/0011-repository-config-from-the-base-commit.md)) |
+| `inline` | Builds inline comments from secret findings and AI findings | Anchors only to diff lines (for AI findings, lines of the diff that was sent); sanitised; capped |
 | `webhook` | Decodes the body (base64 when flagged), verifies `X-Hub-Signature-256`, filters `X-GitHub-Event` and `action` | Verify before parsing; fail closed |
 | `config` | Reads `MERGEGUARD_*` environment variables; loads the three SSM parameters with one `GetParameters` call; caches with a TTL | Never logs values |
 | `github_client` | `GET .../pulls/{n}/files` with pagination; `GET`/`POST .../pulls/{n}/reviews`; the pull request state; commit statuses; review dismissals | `X-GitHub-Api-Version` header; timeouts; maps `401`/`403`/`404`/`422`/`429` to typed errors; never sends `APPROVE` |
@@ -241,6 +251,9 @@ MergeGuard is **stateless and has no database by design**. GitHub stores PRs and
 | `ReviewRequest` (`review_queue.py`) | `delivery_id`, `action`, `pr` | A validated queue message; `pr` carries only repository, number and head SHA |
 | `PullState` (`github_client.py`) | `head_sha`, `state` | What the worker re-checks before and after the AI call |
 | `Verdict` (`pipeline.py`) | `CLEAR`, `UNREVIEWED`, `BLOCKED_SECRETS`, `BLOCKED_AI` | What a review means for merging; drives the commit status and which stale reviews are dismissed (`UNREVIEWED`: scan clean, AI failed; only secret blocks are dismissed) |
+| `AIFinding` | `file`, `line`, `message` | A per-line finding from the `review-v2` prompt; validated leniently, anchored later against the diff that was sent |
+| `InlineComment` (`inline.py`) | `path`, `line`, `body` | Becomes a review comment on the right side of the diff |
+| `RepoConfig` / `ConfigOutcome` (`repo_config.py`) | block level, AI on/off, ignored paths, inline mode, the list of applied settings; or an invalid reason | What the base commit's configuration file means after validation |
 | `AIReview` | `risk_level`, `bugs_found`, `summary`, `feedback_markdown`, `model` | Validated output |
 | `Decision` (`policy.py`) | `event`, `template`, `reason` | Output of `policy`; `render` turns it into the review body |
 | `Outcome` (`pipeline.py`) | `http_status`, `status`, `reason` | Mapped to the HTTP response envelope |
@@ -284,6 +297,11 @@ Details and the threat model are in [SECURITY.md](SECURITY.md).
 | Env var | `MERGEGUARD_QUEUE_URL` | unset (inline mode) | Terraform, receiver only | Read by code (M5); must be an SQS queue URL, or the function fails closed |
 | Env var | `MERGEGUARD_COMMIT_STATUS` | `false` in code, `true` in Terraform (`commit_status_enabled`) | Terraform, worker | Read by code (M5); needs the token's *Commit statuses* permission |
 | Env var | `MERGEGUARD_SCAN_ALLOW_PATHS` | empty | Terraform (`scan_allow_paths`), worker | Read by code (M5); comma-separated relative path globs; invalid entries and bare wildcards fail closed |
+| Env var | `MERGEGUARD_GITHUB_APP_ID` | unset (personal access token) | Terraform (`github_app_id`), worker | Read by code (M6); an App ID is not a secret; the private key is an SSM parameter |
+| Env var | `MERGEGUARD_INLINE_COMMENTS` | `off` in code, `secrets` in Terraform (`inline_comments`) | Terraform, worker | Read by code (M6); `all` also asks the model for per-line findings (`review-v2`) |
+| Env var | `MERGEGUARD_REPO_CONFIG` | `false` in code, `true` in Terraform (`repo_config_enabled`) | Terraform, worker | Read by code (M6); needs *Contents: read* |
+| Env var | `MERGEGUARD_REPO_CONFIG_BLOCK_LEVELS` | `MEDIUM,HIGH` | Terraform (`repo_config_block_levels`), worker | Read by code (M6); the levels a repository may choose for `block_on` |
+| Secret | `<prefix>/github_app_private_key` | — | SSM `SecureString`, worker only, App mode only | Read by code (M6); Terraform creates the placeholder |
 | Terraform var | `aws_region` | `us-east-1` | `terraform.tfvars` | Proposed (value from brief) |
 
 Environment variables hold **non-secret** settings only. Each function gets only the settings it uses: the receiver the prefix, the log level and the queue URL, and the worker the rest. Terraform variables are listed in [DEPLOYMENT.md](DEPLOYMENT.md) §4.
@@ -302,6 +320,9 @@ Environment variables hold **non-secret** settings only. Each function gets only
 | Queue send fails (receiver) | Log `queue.failed`, no AWS error text | `500` |
 | Worker failure of any kind (GitHub, SSM, unexpected error, malformed message) | The record is reported in `batchItemFailures`; SQS retries it, then moves it to the dead-letter queue (3 receives); the alarm fires | — (not an HTTP request) |
 | Head moved or PR closed before the AI call or the post (worker) | Skip with `stale_head` or `pr_closed`; the newer SHA has its own message | — |
+| GitHub App token request fails (`401`, `403`, `404`, `422`, `5xx`, no response) | Raised as the matching `github.*` error; the message is retried and then dead-lettered. `404` often means the App is not installed on the repository, `422` that a requested permission was not granted to the App | — |
+| Repository configuration unreadable (`403`/`404`) or invalid | The defaults apply; an invalid file is noted in the review (`repo_config.invalid`); a server error is retried | — |
+| GitHub refuses the inline comments (`422`) | The review is posted again without them and keeps its verdict (`review.inline_dropped`) | — |
 | Commit status or dismissal fails permanently (permission, protected branch) | Log `status.failed` or `review.dismissal_failed`; the review stands | — |
 | Commit status or dismissal fails transiently (`429`, `5xx`) | Raised: the message is retried, and the duplicate path completes the status and dismissals | — |
 | Unexpected exception | Log type and delivery ID (no payload) | `500` |
@@ -355,8 +376,9 @@ flowchart LR
 | Worker re-checks the current head SHA before the AI call and before posting | 2 — implemented M5 | PRD EC-07 |
 | Remote Terraform state (S3, encrypted, locked) and CI deploy via OIDC | 2 — written M5, never run | [DEPLOYMENT.md](DEPLOYMENT.md) §8, [ADR-0009](ADR/0009-ci-deploy-with-oidc-and-opt-in-remote-state.md) |
 | Alarms and a budget alert | 2 — written M5, never fired | NFR-007, TM-08 |
-| GitHub App installation tokens; Checks API | 3 | FR-020, [ADR-0006](ADR/0006-github-identity-pat-then-app.md) |
-| Inline comments; per-repository JSON config | 3 | FR-021, FR-022 |
+| GitHub App installation tokens | 3 — implemented M6, not deployed | FR-020, [ADR-0006](ADR/0006-github-identity-pat-then-app.md), [ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md) |
+| Checks API | 3 — **not built**; the commit status of M5 remains the signal | FR-020 |
+| Inline comments (secret findings; AI findings opt-in) and per-repository JSON config read from the base commit | 3 — implemented M6, not deployed | FR-021, FR-022, [ADR-0011](ADR/0011-repository-config-from-the-base-commit.md) |
 
 Both Lambdas share one code package with different handlers, which keeps [ADR-0002](ADR/0002-zero-runtime-dependencies.md) intact.
 
@@ -405,7 +427,9 @@ The brief's reference Python and Terraform code was reviewed before any implemen
 | [0003](ADR/0003-secrets-in-ssm-parameter-store.md) | Secrets in SSM Parameter Store | Accepted (brief) |
 | [0004](ADR/0004-secret-scan-gate-before-ai.md) | Deterministic secret scan gates AI review | Accepted (brief) |
 | [0005](ADR/0005-async-webhook-processing.md) | Asynchronous webhook processing | Accepted (implemented M5, not deployed) |
-| [0006](ADR/0006-github-identity-pat-then-app.md) | GitHub identity: PAT first, then GitHub App | Proposed |
+| [0006](ADR/0006-github-identity-pat-then-app.md) | GitHub identity: PAT first, then GitHub App | Accepted (implemented M2 and M6, not deployed) |
 | [0007](ADR/0007-ssm-placeholders-with-write-only-values.md) | Terraform-managed SSM placeholders with write-only values | Accepted |
 | [0008](ADR/0008-scanner-suppressions-are-visible-and-withheld-from-ai.md) | Scanner suppressions are visible and withheld from the AI | Accepted (implemented M5) |
 | [0009](ADR/0009-ci-deploy-with-oidc-and-opt-in-remote-state.md) | CI deploy with GitHub OIDC and opt-in remote state | Accepted (written M5, never run) |
+| [0010](ADR/0010-github-app-jwt-signing-without-dependencies.md) | GitHub App authentication with RS256 signing in the standard library | Accepted (implemented M6, not deployed) |
+| [0011](ADR/0011-repository-config-from-the-base-commit.md) | Repository configuration is read from the base commit | Accepted (implemented M6, not deployed) |

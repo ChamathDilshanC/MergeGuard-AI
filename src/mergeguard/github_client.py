@@ -4,9 +4,10 @@ Error mapping follows docs/API_SPEC.md section 3.2. ``GitHubError.kind`` doubles
 as the suffix of the ``github.*`` log events.
 """
 
+import base64
 import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
@@ -34,6 +35,13 @@ class PullState:
 
     head_sha: str
     state: str  # "open" or "closed"
+    # The commit the pull request is based on. Repository configuration is read
+    # from here, never from the head, so a PR cannot edit its own rules (ADR-0011).
+    base_sha: str | None = None
+
+
+class FileTooLarge(Exception):
+    """A file exists but is larger than the caller will read."""
 
 
 class GitHubError(Exception):
@@ -76,6 +84,7 @@ class GitHubClient:
         retry_delay: float = RETRY_DELAY_SECONDS,
         sleep: Callable[[float], None] = time.sleep,
         has_time: Callable[[float], bool] = _always,
+        login: Callable[[], str] | None = None,
     ) -> None:
         self._token = token
         self._transport = transport
@@ -84,6 +93,9 @@ class GitHubClient:
         self._retry_delay = retry_delay
         self._sleep = sleep
         self._has_time = has_time
+        # App installation tokens cannot call GET /user, so App mode supplies
+        # the bot login instead (app_auth.AppAuth.bot_login).
+        self._login_resolver = login
         self._login: str | None = None
 
     def list_pull_files(
@@ -116,6 +128,8 @@ class GitHubClient:
 
     def authenticated_login(self) -> str:
         """Login of the token owner, cached for the client's lifetime."""
+        if self._login is None and self._login_resolver is not None:
+            self._login = self._login_resolver()
         if self._login is None:
             data = _json(self._request("GET", f"{self._api_url}/user"))
             login = data.get("login") if isinstance(data, dict) else None
@@ -125,11 +139,27 @@ class GitHubClient:
         return self._login
 
     def create_review(
-        self, repo: str, number: int, *, commit_id: str, event: str, body: str
+        self,
+        repo: str,
+        number: int,
+        *,
+        commit_id: str,
+        event: str,
+        body: str,
+        comments: Sequence[Mapping[str, Any]] = (),
     ) -> None:
+        """Post a review. ``comments`` are inline comments (FR-021), each with
+        ``path``, ``line``, ``side`` and ``body``, created with the review so
+        they appear together or not at all."""
         if event not in ALLOWED_REVIEW_EVENTS:
             raise ValueError(f"review event {event!r} is not allowed")
-        payload = {"commit_id": commit_id, "event": event, "body": body}
+        payload: dict[str, Any] = {
+            "commit_id": commit_id,
+            "event": event,
+            "body": body,
+        }
+        if comments:
+            payload["comments"] = [dict(comment) for comment in comments]
         self._request("POST", f"{self._pull_url(repo, number)}/reviews", payload)
 
     def pull_state(self, repo: str, number: int) -> PullState:
@@ -140,7 +170,43 @@ class GitHubClient:
         state = data.get("state") if isinstance(data, dict) else None
         if not isinstance(sha, str) or not isinstance(state, str):
             raise GitHubError("unexpected", 200)
-        return PullState(sha, state)
+        base = data.get("base")
+        base_sha = base.get("sha") if isinstance(base, dict) else None
+        return PullState(sha, state, base_sha if isinstance(base_sha, str) else None)
+
+    def get_file(
+        self, repo: str, path: str, ref: str, max_bytes: int = 1_000_000
+    ) -> bytes | None:
+        """The content of ``path`` at commit ``ref``, or None when GitHub has no
+        such file (or a directory) or does not let this token read it. A repository
+        without the file is the normal case, so neither is an error. A file above
+        ``max_bytes`` raises ``FileTooLarge``; GitHub returns no content at all
+        above 1 MB."""
+        owner, name = repo.split("/")
+        url = (
+            f"{self._api_url}/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
+            f"/contents/{quote(path, safe='/')}?ref={quote(ref, safe='')}"
+        )
+        try:
+            data = _json(self._request("GET", url))
+        except GitHubError as exc:
+            if exc.kind == "forbidden":  # 403 or 404
+                return None
+            raise
+        if not isinstance(data, dict) or data.get("type") not in (None, "file"):
+            return None
+        size = data.get("size")
+        if (isinstance(size, int) and size > max_bytes) or data.get(
+            "encoding"
+        ) == "none":
+            raise FileTooLarge
+        content = data.get("content")
+        if data.get("encoding") != "base64" or not isinstance(content, str):
+            return None
+        try:
+            return base64.b64decode("".join(content.split()), validate=True)
+        except ValueError as exc:
+            raise GitHubError("unexpected", 200) from exc
 
     def create_status(
         self, repo: str, sha: str, *, state: str, description: str

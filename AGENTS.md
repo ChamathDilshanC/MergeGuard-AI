@@ -20,9 +20,10 @@ As of 2026-10-21 the repository contains:
 - the **M2 webhook pipeline**: signature check, event triage, secret scanner, decision policy, review posting with the own-PR fallback, duplicate prevention, dry run and structured logs;
 - the **M3 Gemini review** after a clean scan, tested with mocked responses only. Never make real Gemini calls until OQ-05 is decided;
 - the **M4 Terraform stack** (T-401), checked with credential-free plan tests;
-- the **M5 Phase 2 work**, tested with fakes and a mocked AWS provider: the receiver/worker split with an SQS queue and dead-letter queue (T-501), the commit status (T-502), stale-review dismissal (T-503), scanner suppressions (T-504), a bootstrap stack and a CI deploy workflow (T-505), and alarms with a budget alert (T-506).
+- the **M5 Phase 2 work**, tested with fakes and a mocked AWS provider: the receiver/worker split with an SQS queue and dead-letter queue (T-501), the commit status (T-502), stale-review dismissal (T-503), scanner suppressions (T-504), a bootstrap stack and a CI deploy workflow (T-505), and alarms with a budget alert (T-506);
+- the **M6 Phase 3 work**, tested with fakes: GitHub App authentication with a pure-Python RS256 signer (T-601), inline line-level comments (T-602) and per-repository configuration read from the base commit (T-603).
 
-**Nothing is deployed.** The Terraform stack and the bootstrap stack have never been applied, the deploy workflow has never run, and the AI evaluation (T-304) does not exist yet; see [docs/TASKS.md](docs/TASKS.md). Do not describe features as implemented until code and tests exist, and do not call anything that needs AWS "verified".
+**Nothing is deployed.** The Terraform stack and the bootstrap stack have never been applied, the deploy workflow has never run, and the AI evaluation (T-304) does not exist yet; see [docs/TASKS.md](docs/TASKS.md). Do not describe features as implemented until code and tests exist, and do not call anything that needs AWS or a real GitHub App "verified".
 
 ## 3. Orientation and directory ownership
 
@@ -33,8 +34,8 @@ As of 2026-10-21 the repository contains:
 | `pyproject.toml`, `requirements-dev.txt`, `.python-version` | Python tool configuration and the 3.12 pin | Exists (M1) |
 | `src/lambda_function.py` | Receiver / inline Lambda entry point (`lambda_function.lambda_handler`) | Exists (M2, M5) |
 | `src/worker_function.py` | SQS worker Lambda entry point (`worker_function.lambda_handler`) | Exists (M5) |
-| `src/mergeguard/` | Application modules ([ARCHITECTURE.md](docs/ARCHITECTURE.md) §4.2) | Exists (M2–M5) |
-| `tests/` | Unit, contract, integration tests, fixtures, AI evaluation set; shared fakes and harnesses in `tests/support.py` | Exists (M2–M5); AI evaluation blocked (T-304, OQ-05) |
+| `src/mergeguard/` | Application modules ([ARCHITECTURE.md](docs/ARCHITECTURE.md) §4.2) | Exists (M2–M6) |
+| `tests/` | Unit, contract, integration tests, fixtures, AI evaluation set; shared fakes and harnesses in `tests/support.py`, throwaway RSA keys in `tests/rsa_support.py` | Exists (M2–M6); AI evaluation blocked (T-304, OQ-05) |
 | `terraform/` | All AWS infrastructure; plan tests in `terraform/tests/` | Stack written (M4, M5); never applied |
 | `terraform/bootstrap/` | One-time state bucket and OIDC deploy role; plan tests in `terraform/bootstrap/tests/` | Written (M5, T-505); never applied; maintainer only |
 | `.github/workflows/` | CI and deploy workflows | `ci.yml` exists (M1, extended M5); `deploy.yml` written (M5), manual, never run |
@@ -126,7 +127,7 @@ Run the Python commands inside a Python 3.12 virtual environment, created with `
 - Never write real secrets, tokens, keys, or personal data into code, tests, fixtures, docs, commit messages, or PR text. Use variable **names** and placeholders.
 - Fake credentials follow [docs/TESTING_STRATEGY.md](docs/TESTING_STRATEGY.md) §4: build token-shaped strings at test time; use `AKIAIOSFODNN7EXAMPLE` for AWS.
 - Never disable or bypass webhook signature verification, even in tests.
-- Never log request bodies, diffs, AI raw output, signatures, or secret values.
+- Never log request bodies, diffs, AI raw output, signatures, tokens, JWTs, private keys or secret values.
 - Never introduce an `APPROVE` review path or auto-merge.
 - Never send diff content to the AI provider when the secret scan has findings.
 - Read [docs/SECURITY.md](docs/SECURITY.md) before touching `webhook`, `config`, `scanner`, `render`, `logging_util`, or IAM.

@@ -14,7 +14,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from typing import Any, TextIO
 
 from mergeguard.config import ConfigError, SecretStore, Settings
@@ -23,7 +23,7 @@ from mergeguard.http import Transport, urllib_transport
 from mergeguard.logging_util import JsonLogger
 from mergeguard.pipeline import Outcome
 from mergeguard.review_queue import QueueError, ReviewQueue
-from mergeguard.runtime import build_pipeline
+from mergeguard.runtime import build_pipeline, github_identity
 from mergeguard.webhook import (
     InvalidBody,
     MalformedPayload,
@@ -38,6 +38,7 @@ _EVENT_NAME_RE = re.compile(r"[a-z_]{1,40}")
 
 _secret_store: SecretStore | None = None
 _review_queue: ReviewQueue | None = None
+_app_cache: dict[Any, Any] = {}  # installation tokens, per execution environment
 
 
 def lambda_handler(event: Mapping[str, Any], context: Any) -> dict[str, Any]:
@@ -48,6 +49,7 @@ def lambda_handler(event: Mapping[str, Any], context: Any) -> dict[str, Any]:
         secrets=_cached_secret_store,
         transport=urllib_transport,
         queue=_cached_review_queue,
+        app_cache=_app_cache,
     )
 
 
@@ -77,6 +79,7 @@ def handle(
     queue: Callable[[str], ReviewQueue] | None = None,
     stream: TextIO | None = None,
     clock: Callable[[], float] = time.monotonic,
+    app_cache: MutableMapping[Any, Any] | None = None,
 ) -> dict[str, Any]:
     started = clock()
     headers = lower_headers(event)
@@ -99,6 +102,7 @@ def handle(
             transport,
             queue,
             log,
+            app_cache,
         )
     except ConfigError:
         log.log("config.failed", "ERROR")
@@ -133,6 +137,7 @@ def _process(
     transport: Transport,
     queue: Callable[[str], ReviewQueue] | None,
     log: JsonLogger,
+    app_cache: MutableMapping[Any, Any] | None,
 ) -> Outcome:
     store = secrets(settings.param_prefix)
     receiver_queue = None
@@ -144,6 +149,8 @@ def _process(
         # The receiver reads only the webhook secret; the token stays with the
         # worker (least privilege, SECURITY.md section 5.3). Fails closed.
         webhook_secret = store.webhook_secret()
+    elif settings.github_app_id is not None:
+        webhook_secret = store.webhook_secret()  # App mode never reads the PAT
     else:
         credentials = store.get()  # fails closed (FR-011)
         webhook_secret = credentials.webhook_secret
@@ -177,9 +184,18 @@ def _process(
         receiver_queue.enqueue(delivery_id, triaged.action or "", pr)
         pr_log.log("queue.enqueued")
         return Outcome(202, "accepted")
+    github_token, login = github_identity(
+        settings,
+        store,
+        transport,
+        pr,
+        token=credentials.github_token if credentials else None,
+        cache=app_cache,
+    )
     pipeline = build_pipeline(
         settings,
-        github_token=(credentials or store.get()).github_token,
+        github_token=github_token,
+        login=login,
         gemini_api_key=store.gemini_api_key,
         transport=transport,
         context=context,

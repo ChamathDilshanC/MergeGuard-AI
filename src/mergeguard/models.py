@@ -12,6 +12,8 @@ class PullRequestRef:
     head_sha: str
     author_login: str = ""  # not carried by queue messages (metadata only)
     draft: bool = False
+    # Set by webhooks that GitHub sends for a GitHub App installation (FR-020).
+    installation_id: int | None = None
 
     @property
     def short_sha(self) -> str:
@@ -60,6 +62,16 @@ class DiffBundle:
 
 
 @dataclass(frozen=True, slots=True)
+class AIFinding:
+    """One problem the model tied to a line (FR-021, prompt ``review-v2``). The
+    pipeline posts it inline only if that line is in the diff the model saw."""
+
+    file: str
+    line: int
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class AIReview:
     """Validated AI review output (docs/AI_SYSTEM.md section 5)."""
 
@@ -68,3 +80,4 @@ class AIReview:
     summary: str
     feedback_markdown: str
     model: str
+    findings: tuple[AIFinding, ...] = ()  # only with the review-v2 prompt

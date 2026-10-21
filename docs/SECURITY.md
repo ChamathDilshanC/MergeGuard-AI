@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — webhook verification, secret loading, secret scanning, review sanitisation, log redaction and duplicate handling implemented in M2; AI data handling and prompt-injection defences in M3 (mocked Gemini only); IAM, throttling and logging written in Terraform (M4); the receiver/worker split with per-function roles, scanner suppressions, the alarms and budget, and the OIDC deploy pipeline written in M5. **Nothing is deployed and nothing has been applied** |
+| Status | Draft v0.1 — webhook verification, secret loading, secret scanning, review sanitisation, log redaction and duplicate handling implemented in M2; AI data handling and prompt-injection defences in M3 (mocked Gemini only); IAM, throttling and logging written in Terraform (M4); the receiver/worker split with per-function roles, scanner suppressions, alarms and budget, and the OIDC deploy pipeline in M5; GitHub App authentication with a hand-written RS256 signer, inline comments and base-commit repository configuration in M6. **Nothing is deployed and nothing has been applied** |
 | Last updated | 2026-10-21 |
 | Owner | [@ChamathDilshanC](https://github.com/ChamathDilshanC) |
 | Related | [Architecture](ARCHITECTURE.md) · [AI system](AI_SYSTEM.md) · [Deployment](DEPLOYMENT.md) |
@@ -92,6 +92,9 @@ STRIDE categories: **S**poofing, **T**ampering, **R**epudiation, **I**nformation
 | TM-15 | T/E | A PR author puts `mergeguard:ignore-secret` next to a real credential to get past the gate | The marker only affects its own line; every suppression is listed in the review with rule, file, line and method; suppressed lines are withheld from the AI; the path allow-list is operator-only and fails closed ([ADR-0008](ADR/0008-scanner-suppressions-are-visible-and-withheld-from-ai.md)) | The credential is **not blocked** and reaches the branch history; a human has to read the notice. GitHub push protection is the backstop |
 | TM-16 | E/T | The CI deploy pipeline is abused: a changed workflow applies without approval, or the deploy role is misused | OIDC trust limited to this repository's two environments; no AWS keys in GitHub; the apply job runs in an environment with required reviewers and applies only the saved plan; actions pinned to commit SHAs; deploys run only on `main`; the role is scoped to `mergeguard*` in one account and region (§5.10, [ADR-0009](ADR/0009-ci-deploy-with-oidc-and-opt-in-remote-state.md)) | The plan job holds the same role, so anyone who can change the workflow on `main` can skip the approval. Needs branch protection on `main` and main-only environments. The role can create IAM roles under `mergeguard_*` |
 | TM-17 | T | A forged or malformed message in the queue triggers unwanted work | Only the receiver's role may send; the worker validates every field like a webhook payload and re-fetches everything from GitHub; messages hold metadata only; a bad message ends in the dead-letter queue | Someone holding `sqs:SendMessage` could trigger a review of a pull request the token already covers |
+| TM-18 | S/E | The GitHub App's private key is stolen, so an attacker mints installation tokens for every installation | Stored as an SSM SecureString read only by the worker role; the signer never logs it; tokens are scoped to one repository, carry only `pull_requests`, `contents` (read) and `statuses`, and last at most an hour; a rotated key is picked up without a restart (§5.11, IR-5) | The key sits in worker memory; the signer is hand-written and not independently audited (ADR-0010). Until it is revoked, a thief can act as the App |
+| TM-19 | T/E | A pull request edits `.github/mergeguard.json` to relax or switch off its own review | The file is read from the PR's base commit, never the head; the operator sets the bounds; the file cannot touch the secret scan or add suppressions; an unknown key or out-of-bounds value discards the whole file and says so in the review ([ADR-0011](ADR/0011-repository-config-from-the-base-commit.md)) | Someone with write access to the base branch can relax the repository's own thresholds or exclude paths from the AI; the review lists what was applied |
+| TM-20 | T/I | AI inline comments spam, mislead or point at lines the author never wrote, or leak a flagged value | Anchored only to diff lines that were sent to the model; withheld lines are never anchored; text sanitised like all model output; at most 10 AI and 25 secret comments; secret comments name the rule, never the value; AI findings are opt-in (`all`) | An anchored but wrong comment is possible; per-line accuracy is unmeasured until T-304 |
 
 ## 5. Controls by component
 
@@ -106,7 +109,7 @@ STRIDE categories: **S**poofing, **T**ampering, **R**epudiation, **I**nformation
 
 - Phase 1: a fine-grained personal access token with the permissions in [API_SPEC.md](API_SPEC.md) §3.3, restricted to the target repositories, with an expiry date.
 - Prefer a dedicated machine account over the maintainer's personal account ([OQ-06](PRD.md#17-open-questions)). This also avoids the own-PR `422` limitation.
-- Phase 3: GitHub App installation tokens, which are short-lived and scoped per installation ([ADR-0006](ADR/0006-github-identity-pat-then-app.md)).
+- Phase 3 (M6): GitHub App installation tokens, minted per repository with minimal permissions and valid for at most an hour ([ADR-0006](ADR/0006-github-identity-pat-then-app.md), [ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md), §5.11). Set `github_app_id` to switch; the personal access token is then never read.
 
 ### 5.3 IAM (FR-012)
 
@@ -125,7 +128,7 @@ Two inline policies, one per function, so each can do only its own job. Both are
 | Action | Resource |
 | --- | --- |
 | `logs:CreateLogStream`, `logs:PutLogEvents` | `arn:aws:logs:<region>:<account>:log-group:/aws/lambda/mergeguard-ai-pr-worker:*` |
-| `ssm:GetParameter`, `ssm:GetParameters` | `…:parameter/mergeguard/github_token` and `…:parameter/mergeguard/gemini_api_key` |
+| `ssm:GetParameter`, `ssm:GetParameters` | `…:parameter/mergeguard/github_token`, `…:parameter/mergeguard/github_app_private_key` and `…:parameter/mergeguard/gemini_api_key` |
 | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` | `arn:aws:sqs:<region>:<account>:mergeguard-review-requests` |
 
 The receiver cannot read the GitHub token or the Gemini key, and the worker cannot read the webhook secret, so a bug in the public-facing function cannot reach the token. `kms:Decrypt` is needed only if a customer-managed key replaces `aws/ssm`; it would be scoped to that key ARN. `logs:CreateLogGroup` is not needed because Terraform creates the log groups. The Lambda permission for API Gateway uses `source_arn` scoped to `POST /webhook` of this API.
@@ -172,7 +175,7 @@ The queues use SSE-SQS. The dead-letter queue accepts redrives only from the rev
 
 checkov runs in CI on every PR (TESTING_STRATEGY.md §5). Each accepted finding is skipped **inline on its resource**, with the reason next to it. There are no blanket skips. API Gateway access logging (CKV_AWS_76) was fixed rather than skipped.
 
-**Confirmed by CI.** PR #4 (M4): 27 passed, 0 failed, 11 skipped, after the secrets-scan false positive (a Terraform local named like a credential) was fixed by renaming it. PR #5 (M5): 78 passed, 0 failed, 33 skipped over `terraform/` and `terraform/bootstrap/`. Checkov could not be installed locally in M5 (very slow package downloads), so CI was its first run on the M5 resources. Every skip below was triggered, so none is unused. The M4 Lambda skips now apply to both Lambda functions.
+**Confirmed by CI.** PR #4 (M4): 27 passed, 0 failed, 11 skipped, after the secrets-scan false positive (a Terraform local named like a credential) was fixed by renaming it. PR #5 (M5): 78 passed, 0 failed, 33 skipped over `terraform/` and `terraform/bootstrap/`. PR #6 (M6): 79 passed, 0 failed, 34 skipped, no parsing errors; the one extra skip is `CKV_AWS_337` on the new `github_app_private_key` parameter, for the same reason as the other three SSM parameters (ADR-0003). Checkov could not be installed locally in M5 (very slow package downloads), so CI was its first run on the M5 resources. Every skip below was triggered, so none is unused. The M4 Lambda skips now apply to both Lambda functions.
 
 **A parsing error is a finding.** The first M5 run reported `Parsing errors: 1`: checkov's HCL parser could not read `terraform/variables.tf` (a `for` condition continued across lines), so it **skipped the file and still exited 0**. The condition was split into one-line validations, and the CI policy-scan step now fails if checkov reports a parsing error.
 
@@ -225,6 +228,23 @@ Written in M5, **never run**. It is checked with `actionlint`, static tests of t
 4. **The first deploy may find a missing permission.** The policy is derived from the Terraform resources. Add what AWS reports as denied; never widen to `*`.
 5. **A saved plan is an artifact.** It is kept for one day. It contains resource names and the account ID, never a secret value.
 
+### 5.11 GitHub App and repository configuration (T-601, T-603)
+
+Written in M6, **never run against GitHub**. The signer was checked against OpenSSL; everything else with fakes.
+
+| Control | How |
+| --- | --- |
+| Key custody | `github_app_private_key` is a fourth SSM SecureString with a Terraform placeholder (ADR-0007). Only the worker role can read it; the receiver cannot. In App mode the personal access token parameter is never read |
+| Signing | Pure-Python RS256: blinded private-key operation, signature verified with the public exponent before it is returned, strict DER, 2048 to 8192 bits, no encrypted keys, no private exponent in `repr` ([ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md)) |
+| Token scope | One repository per token, only `pull_requests: write`, plus `contents: read` when repository configuration is on and `statuses: write` when the status is on. A permission the App was not granted makes GitHub refuse the token (`422`), which fails closed |
+| Token lifetime | At most an hour, cached per execution environment and renewed five minutes early. Never logged |
+| Identity | The App's bot account (`<slug>[bot]`) is the author used for the duplicate check and for dismissals, so a copied marker still cannot suppress a review (TM-14) |
+| Installation required | In App mode a webhook without an installation ID fails closed (`config.failed`, retried, then dead-lettered). A malformed `installation` object is a `400` |
+| Configuration trust | Read from the base commit, validated against operator bounds, all or nothing, and unable to touch the scan or suppressions (ADR-0011, TM-19) |
+| Inline comments | Anchored to diff lines only; withheld lines excluded; sanitised; capped (TM-20) |
+
+**Residual risks:** the signer is custom cryptography without a third-party audit; anyone who can read the worker's SSM parameters can read the App key (the deploy role can, §5.10); a repository maintainer can relax their own repository's thresholds within the operator's bounds.
+
 ## 6. Secret inventory and rotation
 
 | Secret | Created by | Rotation trigger | Rotation steps |
@@ -232,6 +252,7 @@ Written in M5, **never run**. It is checked with `actionlint`, static tests of t
 | GitHub token | Operator, in GitHub settings | Before expiry; on suspicion | New token → `aws ssm put-parameter --overwrite` → wait for the cache TTL or redeploy → revoke the old token |
 | Webhook secret | Operator (CSPRNG) | Yearly; on suspicion | Update SSM → update GitHub webhook immediately → redeliver any `401` deliveries from the gap |
 | Gemini API key | Operator, in Google AI Studio | On suspicion; per owner policy | New key → update SSM → delete the old key in Google AI Studio |
+| GitHub App private key | Operator, in the App's settings | On suspicion; per owner policy | Generate a new key in GitHub → update SSM → delete the old key in GitHub (IR-5) |
 
 ## 7. Incident runbooks
 
@@ -260,6 +281,13 @@ This is the product working as designed; the runbook is for the **PR author**:
 2. Remove it from the code and load it from SSM or the environment instead.
 3. If it reached a default branch, follow the provider's compromise guidance. Rewriting history is not enough on its own.
 
+### IR-5 — GitHub App private key exposed
+
+1. In the App's settings, **generate a new private key**, store it in SSM (`--overwrite`), then **delete the old key** in GitHub. Installation tokens already issued expire within an hour.
+2. If you cannot be sure the key was not used, suspend the App's installations until the old key is gone.
+3. Review recent reviews, comments and commit statuses by `<slug>[bot]` on the covered repositories.
+4. Find how it leaked (logs, a downloaded `.pem`, screenshots) and record the cause. Never keep the downloaded `.pem` file.
+
 ## 8. Security review checklist (per release)
 
 - [ ] Signature verification tests pass, including tampered body, wrong prefix, missing header, and base64 body.
@@ -268,6 +296,9 @@ This is the product working as designed; the runbook is for the **PR author**:
 - [ ] IAM policy has no `*` in actions or resource account/region fields; `checkov` findings are triaged.
 - [ ] No new runtime dependency in `src/`.
 - [ ] Policy still never emits `APPROVE`.
+- [ ] The App key is readable only by the worker role, and a placeholder or unusable key fails closed.
+- [ ] Repository configuration is read from the base commit (test `test_the_config_is_read_from_the_base_commit_never_the_head`) and cannot disable the scan.
+- [ ] No inline comment is anchored to a line outside the diff or to a withheld line (ST-18).
 - [ ] Each Lambda role names only the secrets its function reads (`test_infra_contract.py`); the receiver cannot read the GitHub token.
 - [ ] Every suppression is listed in the review, and a suppressed line is absent from the Gemini request body (ST-10, ST-11).
 - [ ] The deploy workflow has no AWS keys, pins every action, and its apply job needs the approval environment (`test_workflows.py`).

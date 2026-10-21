@@ -1,6 +1,6 @@
 # ADR-0006 — GitHub identity: PAT first, then GitHub App
 
-- **Status:** Proposed
+- **Status:** Accepted — Phase 1 (token) implemented in M2; Phase 3 (App) implemented in M6 under [ADR-0010](0010-github-app-jwt-signing-without-dependencies.md), not deployed
 - **Date:** 2026-10-21
 - **Related:** PRD FR-010, FR-020, R-05, R-06, OQ-06 · [SECURITY.md](../SECURITY.md) §5.2
 
@@ -12,7 +12,7 @@ The brief authenticates to GitHub with a fine-grained personal access token (PAT
 - **Personal identity.** Reviews appear under a person's account. Expiry and revocation depend on that person.
 - **No Checks API.** Check runs require a GitHub App; a PAT can only set commit statuses.
 
-## Decision (proposed)
+## Decision
 
 1. **Phase 1:** use a fine-grained PAT with minimal permissions, preferably owned by a dedicated machine account. Implement the `422` → `COMMENT` fallback (FR-010).
 2. **Phase 3:** move to a **GitHub App**:
@@ -31,4 +31,4 @@ The brief authenticates to GitHub with a fine-grained personal access token (PAT
 ## Consequences
 
 - Phase 1 stays simple, at the cost of the fallback behaviour and manual token rotation.
-- Phase 3 needs a new ADR that settles the JWT signing choice above and the App permission set.
+- Phase 3 needed a new ADR that settles the JWT signing choice above and the App permission set: [ADR-0010](0010-github-app-jwt-signing-without-dependencies.md) chose pure-Python RS256 with the permission set `pull_requests: write`, `contents: read` and `statuses: write`. The personal access token remains the default when no App ID is set.

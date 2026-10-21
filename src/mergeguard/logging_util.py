@@ -33,6 +33,8 @@ ALLOWED_FIELDS = frozenset(
         "commit_state",
         "suppressed",
         "dismissed",
+        "inline_comments",
+        "config_keys",
     }
 )
 LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}

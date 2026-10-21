@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — inbound contract (§2), GitHub and SSM calls (§3, §5) implemented in M2; Gemini (§4) implemented in M3 and tested only against mocked responses; the receiver's `202`, the SQS send and queue message (§6), and the pull state, commit status and dismissal calls (§3.1) implemented in M5 and tested with fakes. **Nothing is deployed yet** |
+| Status | Draft v0.1 — inbound contract (§2), GitHub and SSM calls (§3, §5) implemented in M2; Gemini (§4) in M3, tested only against mocked responses; the receiver's `202`, the SQS send and queue message (§6), and the pull state, commit status and dismissal calls (§3.1) in M5; GitHub App token requests, the contents call, inline review comments and the optional installation ID (§2.2, §3.1, §6) in M6. All tested with fakes. **Nothing is deployed yet** |
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) · [AI system](AI_SYSTEM.md) · [Security](SECURITY.md) |
 
@@ -48,7 +48,7 @@ Only these fields of the GitHub `pull_request` event payload are read. Everythin
 | `pull_request.draft` | boolean | Skip drafts (Proposed, OQ-09) |
 | `pull_request.user.login` | string | Logging; own-PR detection |
 | `repository.full_name` | string | `owner/repo` for API paths |
-| `installation.id` | integer | Phase 3 only (GitHub App) |
+| `installation.id` | integer | Present on webhooks sent for a GitHub App installation (M6). Forwarded in the queue message and used to mint an installation token (FR-020). A present but invalid `installation` object is `400` `malformed_payload` |
 
 ### 2.3 Responses
 
@@ -119,6 +119,9 @@ Content-Type: application/json
 | Read the pull request | `GET /repos/{owner}/{repo}/pulls/{pull_number}` | 2 | The worker reads `head.sha` and `state` before the AI call and again before posting; a moved head or a closed PR skips the work (PRD EC-07, EC-14) |
 | Dismiss a review | `PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals` | 2 | Body: `{"message": "...", "event": "DISMISS"}` (FR-018). Only the bot's own older `CHANGES_REQUESTED` reviews that carry the marker |
 | Create commit status | `POST /repos/{owner}/{repo}/statuses/{sha}` | 2 | Body: `{"state", "context": "mergeguard/review", "description"}` with `description` cut to 140 characters (FR-017). Off unless `MERGEGUARD_COMMIT_STATUS` is `true` |
+| App installation token | `POST /app/installations/{installation_id}/access_tokens` | 3 | App mode only. Authorised with the App JWT. Body: `{"repositories": ["<name>"], "permissions": {...}}`, so the token covers one repository and only `pull_requests: write` (plus `contents: read` and `statuses: write` when used). Returns `token` and `expires_at` (FR-020) |
+| The App itself | `GET /app` | 3 | App mode only, with the JWT. `slug` gives the bot login `<slug>[bot]` used for the duplicate and dismissal checks |
+| Read a file | `GET /repos/{owner}/{repo}/contents/{path}?ref={sha}` | 3 | Reads `.github/mergeguard.json` at the **base commit** (FR-022). `403`/`404` mean no file; content above the limit or with `encoding: none` is reported as too large |
 
 **Create-review request body:**
 
@@ -131,6 +134,19 @@ Content-Type: application/json
 ```
 
 `event` is `COMMENT` or `REQUEST_CHANGES`; MergeGuard never sends `APPROVE` (PRD §6.2). `body` must not exceed 60,000 characters (FR-009).
+
+**Inline comments (FR-021, M6).** When inline comments are on, the same request carries a `comments` array, so they appear with the review or not at all:
+
+```json
+{
+  "commit_id": "<head sha>",
+  "event": "REQUEST_CHANGES",
+  "body": "...",
+  "comments": [{ "path": "src/app.py", "line": 12, "side": "RIGHT", "body": "..." }]
+}
+```
+
+`line` is a line of the new version of the file that the diff shows (an added or a context line). At most 25 secret comments and 10 AI comments are sent. If GitHub answers `422`, MergeGuard posts the same review **without** the comments before considering the own-PR fallback; a `422` creates nothing, so retrying cannot duplicate a review.
 
 ### 3.2 Error mapping
 
@@ -146,7 +162,9 @@ Content-Type: application/json
 
 **Status and dismissal calls are signals, not part of the review.** A permanent failure of a commit status or a dismissal (`401`-`404`, `422`: a missing permission, or a protected branch that refuses the dismissal) is logged (`status.failed`, `review.dismissal_failed`, WARNING) and the review stands. A transient failure (`429`, `5xx`, no response) is raised like any other, so the worker retries the message and the duplicate path finishes the job.
 
-### 3.3 Token permissions (fine-grained PAT)
+**App token errors (M6).** The token request maps like any GitHub call: `401` `github.auth_failed` (wrong App ID or key), `403`/`404` `github.forbidden` (`404`: the App is not installed on the repository), `422` `github.invalid_request` (a requested permission was not granted to the App), `5xx` or no response `github.unavailable`. A key that cannot be used is `config.failed`. All fail the message, which is retried and then dead-lettered.
+
+### 3.3 Token permissions (fine-grained PAT, or GitHub App)
 
 | Permission | Access | Why |
 | --- | --- | --- |
@@ -155,6 +173,7 @@ Content-Type: application/json
 | Contents | Read | Listed in the brief; keep until tests confirm it is not needed |
 | Metadata | Read (always included) | Required by GitHub |
 | Commit statuses | Read and write | Phase 2 (FR-017); needed while `commit_status_enabled` is true (the Terraform default) |
+| Contents | Read | Also reads `.github/mergeguard.json` when `repo_config_enabled` (FR-022). The same permissions apply to a GitHub App's repository permissions (§3.4 of DEPLOYMENT.md) |
 
 Dismissing a review on a protected branch can additionally require the token owner to be allowed to dismiss reviews in the branch rule; if not, GitHub refuses and MergeGuard logs `review.dismissal_failed`.
 
@@ -225,6 +244,8 @@ Dismissing a review on a protected branch can additionally require the token own
   "received_at": "2026-10-21T08:00:00Z"
 }
 ```
+
+**Optional installation ID (M6).** For webhooks sent through a GitHub App, the message also carries `"installation_id": <positive integer>`, which the worker needs to mint a token. The field is absent for repository webhooks. This is a backward-compatible addition to v1, so the schema name does not change; a present but invalid value is rejected.
 
 ## 7. Versioning
 

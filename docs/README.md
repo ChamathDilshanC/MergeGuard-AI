@@ -12,7 +12,7 @@ Documentation for MergeGuard AI, a serverless DevSecOps pull-request reviewer. F
 | **Assumption** | Treated as true for planning; must be validated |
 | **Open** / **TBD** | Undecided; tracked as `OQ-` items in [PRD.md](PRD.md) §17 |
 
-As of 2026-10-21, M1 to M5 are Verified by automated tests: Gemini is mocked, SQS and GitHub are faked, and the Terraform plans are tested against a mocked AWS provider. **Nothing is deployed**, the CI deploy workflow has never run, and no real Gemini call has been made (OQ-05). Properties that need AWS (acknowledgement latency, alarms firing, the deploy itself) are Planned until T-402 and T-403.
+As of 2026-10-21, M1 to M6 are Verified by automated tests: Gemini is mocked, SQS and GitHub are faked, and the Terraform plans are tested against a mocked AWS provider. **Nothing is deployed**, the CI deploy workflow has never run, and no real Gemini call has been made (OQ-05). Properties that need AWS (acknowledgement latency, alarms firing, the deploy itself) are Planned until T-402 and T-403.
 
 ## Core documents
 
@@ -42,10 +42,12 @@ As of 2026-10-21, M1 to M5 are Verified by automated tests: Gemini is mocked, SQ
 | [0003](ADR/0003-secrets-in-ssm-parameter-store.md) | Secrets in SSM Parameter Store | Accepted (brief) |
 | [0004](ADR/0004-secret-scan-gate-before-ai.md) | Secret scan gates AI review | Accepted (brief) |
 | [0005](ADR/0005-async-webhook-processing.md) | Asynchronous webhook processing | Accepted (implemented M5, not deployed) |
-| [0006](ADR/0006-github-identity-pat-then-app.md) | GitHub identity: PAT, then GitHub App | Proposed |
+| [0006](ADR/0006-github-identity-pat-then-app.md) | GitHub identity: PAT, then GitHub App | Accepted (implemented M2 and M6, not deployed) |
 | [0007](ADR/0007-ssm-placeholders-with-write-only-values.md) | SSM placeholders with write-only values | Accepted |
 | [0008](ADR/0008-scanner-suppressions-are-visible-and-withheld-from-ai.md) | Scanner suppressions are visible and withheld from the AI | Accepted (implemented M5) |
 | [0009](ADR/0009-ci-deploy-with-oidc-and-opt-in-remote-state.md) | CI deploy with GitHub OIDC and opt-in remote state | Accepted (written M5, never run) |
+| [0010](ADR/0010-github-app-jwt-signing-without-dependencies.md) | GitHub App authentication with RS256 signing in the standard library | Accepted (implemented M6, not deployed) |
+| [0011](ADR/0011-repository-config-from-the-base-commit.md) | Repository configuration is read from the base commit | Accepted (implemented M6, not deployed) |
 
 See the [ADR index](ADR/README.md) for the process.
 
