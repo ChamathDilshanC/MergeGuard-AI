@@ -17,14 +17,18 @@ src = ["src", "tests"]
 # E/W/F: pycodestyle + pyflakes; I: import order; B: bugbear; UP: pyupgrade;
 # S: bandit security rules; ANN: type hints (AGENTS.md section 5).
 select = ["E", "W", "F", "I", "B", "UP", "S", "ANN"]
+# JSON payloads and the Lambda context object are dynamically typed; Any is honest.
+ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "ANN"]
+# Tests use asserts, deliberately fake credentials, and long snapshot strings.
+"tests/**/*.py" = ["S101", "S105", "S106", "ANN", "E501"]
 
 [tool.pytest.ini_options]
 minversion = "9.0"
 testpaths = ["tests"]
-pythonpath = ["src"]
+# tests/ is on the path so test modules can import the shared tests/support.py.
+pythonpath = ["src", "tests"]
 addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
 
 [tool.coverage.run]

@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — **all conventions Proposed**; no implementation yet |
+| Status | Draft v0.1 — templates (§5, except §5.6 and `N-SUPPRESSED`), sanitisation, log conventions (§7) and rule IDs (§8) implemented in M2 and snapshot-tested |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) · [API spec](API_SPEC.md) · [AI system](AI_SYSTEM.md) |
 
@@ -181,7 +181,7 @@ When GitHub rejects `REQUEST_CHANGES` with `422` because the token owner authore
 
 - Replace `@` before a GitHub handle pattern with `@​` (zero-width space) so nobody is notified.
 - Convert any Markdown heading in model output (`#` to `######`) into bold text, so it cannot compete with the template's own headings.
-- Strip raw HTML comments that look like the `mergeguard:` marker, so model output cannot spoof one.
+- Strip HTML comments that look like the `mergeguard:` marker, closed or not, so model output cannot spoof one. Escape any other `<!--` so the model cannot hide text from readers.
 - Truncate to the §4.3 limits and append "(truncated)".
 
 ## 6. HTTP response conventions
@@ -212,8 +212,21 @@ One JSON object per line. Field names are `snake_case`.
 | `prompt_version` | string | On AI call | `review-v1` |
 | `reason` | string | On skip or failure | `rate_limited` |
 | `duration_ms` | integer | On completion | `8421` |
+| `github_event` | string | On receipt | `pull_request` |
+| `status` | string | On completion | `reviewed` |
+| `http_status` | integer | On completion and GitHub errors | `422` |
+| `file_count` | integer | After fetching files | `12` |
+| `body_length` | integer | Dry run | `1834` |
+| `error_type` | string | Unhandled errors | `RuntimeError` |
 
-**Event names:** `webhook.received`, `webhook.rejected`, `webhook.ignored`, `config.loaded`, `files.fetched`, `scan.completed`, `ai.completed`, `ai.failed`, `review.posted`, `review.fallback_comment`, `review.skipped`, `review.duplicate`, `github.auth_failed`, `github.forbidden`, `github.invalid_request`, `error.unhandled`.
+**Event names:**
+
+- **Webhook:** `webhook.received`, `webhook.rejected`, `webhook.ignored`, `webhook.completed`, `config.failed`.
+- **Pipeline:** `files.fetched`, `scan.completed`, `review.posted`, `review.fallback_comment`, `review.skipped`, `review.duplicate`, `review.dry_run`.
+- **GitHub errors:** `github.auth_failed`, `github.forbidden`, `github.invalid_request`, `github.rate_limited`, `github.unavailable`, `github.unexpected`.
+- **Other:** `error.unhandled`; `ai.completed` and `ai.failed` arrive with M3.
+
+`delivery_id` and `github_event` come from request headers, so they are logged only when they match the expected format; otherwise the value `invalid` is used.
 
 **Never logged:** request body, headers other than event and delivery ID, signature, tokens, keys, diff or patch text, AI prompt or raw response, matched secret values.
 

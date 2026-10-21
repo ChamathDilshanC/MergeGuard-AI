@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — M1 tooling and scaffold tests exist; feature tests arrive with M2 and later |
+| Status | Draft v0.1 — unit, contract and integration tests for M1–M2 exist; AI evaluation (M3) and E2E (M4) are not built yet |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) · [Architecture](ARCHITECTURE.md) §13 · [Security](SECURITY.md) §8 · [AI system](AI_SYSTEM.md) §9 |
 
@@ -28,16 +28,15 @@ Target ratio: mostly unit tests, a focused contract and integration layer, and a
 
 ## 3. Test doubles and fixtures
 
-- **Injectable HTTP transport.** `mergeguard/http.py` exposes one `request(method, url, headers, body, timeout)` function. Tests pass a fake that matches on method and URL and returns recorded responses. Do not monkeypatch `urllib` globally.
-- **SSM stub.** `config` accepts an injected client. Tests use a fake whose `get_parameters` returns fixed test values.
-- **Recorded fixtures** live in `tests/fixtures/`:
+- **Injectable HTTP transport.** `mergeguard/http.py` defines the `Transport` signature `(method, url, headers, body, timeout)` and the real `urllib_transport`. Tests pass `FakeTransport` from `tests/support.py`, which matches on method and URL regex, replays canned responses or exceptions, and records every call. `urlopen` is only replaced inside `mergeguard.http`, never globally.
+- **SSM stub.** `config.SecretStore` takes a client factory. Tests use `FakeSsm`, whose `get_parameters` returns fixed test values.
+- **Fixtures** live in `tests/fixtures/`; responses are mostly built in tests:
 
   | Fixture | Content |
   | --- | --- |
-  | `webhooks/pull_request_opened.json`, `..._synchronize.json`, `..._draft.json`, `ping.json`, `issues_opened.json` | Trimmed GitHub payloads |
-  | `github/pull_files_page1.json`, `..._page2.json`, `..._no_patch.json` | PR files API responses |
-  | `github/reviews_existing.json` | For the duplicate check |
-  | `gemini/ok_low.json`, `ok_high.json`, `invalid_json.json`, `schema_mismatch.json`, `blocked.json` | Gemini responses |
+  | `webhooks/pull_request_opened.json`, `ping.json`, `issues_opened.json` | Trimmed GitHub payloads. Variants (other actions, drafts, bad fields) are derived in tests with `support.pull_request_payload(...)` |
+  | GitHub files, reviews and user responses | Built in tests with `support.json_response` and `support.file_entry`, so each test shows the data it depends on |
+  | `gemini/*.json` | Recorded Gemini responses (M3) |
 
 - Fixtures must be **sanitised**: no real tokens, private repository names, or personal data. Use `owner/repo` and `octocat`.
 - Webhook signatures in tests are computed at test time with a test-only secret. Never disable verification to make a test pass.
@@ -51,6 +50,9 @@ The scanner is the product's main security control, so it has its own corpus in 
 | Positive | At least 3 variants per rule (`aws-access-key-id`, `private-key-pem` for RSA/EC/OPENSSH/DSA/PKCS#8/encrypted, `github-token`, `google-api-key`, `generic-assignment`) | 100% detected (SM-3) |
 | Negative | Look-alikes: placeholder values, short strings, `os.environ[...]` lookups, removed lines (`-`), context lines, `+++` headers, documentation of patterns | ≤ 5% flagged (SM-3) |
 | Regression | Every reported false positive or negative becomes a case | No regressions |
+| Self-scan | Every text file in this repository is scanned (`test_self_scan.py`) | No hits except AWS's documented example key ID |
+
+The suite enforces **0%** flagged negatives, stricter than the SM-3 gate.
 
 **Fake-secret policy:**
 

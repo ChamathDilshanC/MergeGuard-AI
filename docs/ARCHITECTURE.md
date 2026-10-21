@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — target architecture; M1 foundation in place, **no features implemented yet** |
+| Status | Draft v0.1 — M1 foundation and M2 webhook pipeline (no AI) implemented; **not deployed** |
 | Last updated | 2026-10-21 |
 | Owner | [@ChamathDilshanC](https://github.com/ChamathDilshanC) |
 | Related | [PRD](PRD.md) · [API spec](API_SPEC.md) · [Security](SECURITY.md) · [Deployment](DEPLOYMENT.md) · [ADRs](ADR/README.md) |
@@ -11,7 +11,11 @@
 
 This document describes how MergeGuard AI is built. It covers the **Phase 1 (MVP)** architecture, which follows the owner's brief with its defects fixed, and the **Phase 2–3 target architecture**.
 
-**Current state (verified 2026-10-21):** milestone M1 added the project skeleton, dev tooling, a Terraform skeleton without resources, and a CI workflow (§4.1). There is no application logic and no deployed infrastructure. Component names below come from the brief (Planned) or are recommendations (Proposed).
+**Current state (verified 2026-10-21):**
+
+- **M1** added the project skeleton, dev tooling, a Terraform skeleton without resources, and a CI workflow (§4.1).
+- **M2** added the webhook pipeline without AI: signature check, event triage, secret scan, decision policy, review posting with the own-PR fallback, duplicate prevention, dry run and structured logging. It is covered by unit, contract and integration tests.
+- **Not yet built:** the AI review (M3) and Terraform resources (T-401). Nothing is deployed. Component names below come from the brief (Planned) or are recommendations (Proposed).
 
 ## 2. System context
 
@@ -63,16 +67,18 @@ flowchart LR
 ├── requirements-dev.txt       # Pinned dev-only tools
 ├── docs/                      # This documentation suite
 ├── src/
-│   └── mergeguard/__init__.py # Package skeleton; modules arrive with their tasks
+│   ├── lambda_function.py     # Lambda entry point (M2)
+│   └── mergeguard/            # M2 modules; AI modules arrive in M3
 ├── terraform/
 │   ├── .terraform.lock.hcl
 │   ├── providers.tf
 │   ├── variables.tf           # Variables from DEPLOYMENT.md section 4; no resources yet
 │   └── versions.tf
 └── tests/
-    ├── fixtures/              # Empty until M2
-    ├── integration/           # Empty until M2
-    └── unit/                  # Scaffold tests, including the ADR-0002 import gate
+    ├── fixtures/webhooks/     # Sanitised webhook payloads
+    ├── integration/           # Handler end to end with fake GitHub and SSM
+    ├── support.py             # Shared fakes and fake-secret helpers
+    └── unit/                  # Module tests; scanner corpus and self-scan in unit/scanner/
 ```
 
 ### 4.2 Proposed (Phase 1)
@@ -94,7 +100,8 @@ src/
     ├── policy.py              # Pure decision function (FR-010)
     ├── render.py              # Markdown templates and sanitisation (DESIGN_SYSTEM.md)
     ├── models.py              # Dataclasses (section 7)
-    └── logging_util.py        # JSON log helper with redaction
+    ├── logging_util.py        # JSON log helper with redaction
+    └── pipeline.py            # One review: files, duplicate check, scan, decision, post
 tests/
 ├── unit/
 ├── integration/               # Handler-level tests with fake transport
@@ -123,6 +130,7 @@ Terraform packages the code with `archive_file` using `source_dir = "../src"` in
 | `policy` | Maps scan findings and the AI result to a review event | Pure function; never `APPROVE` |
 | `render` | Produces the review Markdown from templates; sanitises model text; enforces length caps | Hidden marker `<!-- mergeguard:v1 ... -->` |
 | `logging_util` | Emits one JSON object per line | Allow-listed fields only |
+| `pipeline` | Orders one review: files, duplicate check, scan, (AI from M3), decision, render, post with own-PR fallback | No HTTP or signature concerns; returns an `Outcome` for the handler |
 
 ## 6. Request lifecycle
 
@@ -171,13 +179,14 @@ MergeGuard is **stateless and has no database by design**. GitHub stores PRs and
 
 | Type | Key fields | Notes |
 | --- | --- | --- |
-| `WebhookDelivery` | `delivery_id`, `event`, `action`, `raw_body` | Built from headers `X-GitHub-Delivery`, `X-GitHub-Event` |
-| `PullRequestRef` | `owner`, `repo`, `number`, `head_sha`, `author_login`, `draft` | From `pull_request` payload |
+| `Triage` (`webhook.py`) | `status`, `reason`, `action`, `pull_request` | Result of triaging an authenticated delivery |
+| `PullRequestRef` | `repo` (`owner/name`), `number`, `head_sha`, `author_login`, `draft` | From `pull_request` payload; validated (repository name, 40/64-hex SHA) |
 | `ChangedFile` | `filename`, `status`, `patch` (optional) | From the PR files API |
-| `DiffBundle` | `files`, `text`, `truncated`, `omitted_files` | Built under `MERGEGUARD_MAX_DIFF_CHARS` |
-| `SecretFinding` | `rule_id`, `filename`, `line`, `hint` | `hint` is masked; never the value |
+| `DiffBundle` | `files`, `text`, `truncated`, `omitted_files` | M3; built under `MERGEGUARD_MAX_DIFF_CHARS` |
+| `SecretFinding` | `rule_id`, `filename`, `line` | Holds no part of the matched value (no masked hint either) |
 | `AIReview` | `risk_level`, `bugs_found`, `summary`, `feedback_markdown`, `model` | Validated output |
-| `ReviewDecision` | `event`, `template`, `body`, `reason` | Output of `policy` + `render` |
+| `Decision` (`policy.py`) | `event`, `template`, `reason` | Output of `policy`; `render` turns it into the review body |
+| `Outcome` (`pipeline.py`) | `http_status`, `status`, `reason` | Mapped to the HTTP response envelope |
 
 ## 8. Integration contracts
 
@@ -226,7 +235,7 @@ Environment variables hold **non-secret** settings only. Terraform variables are
 | SSM unavailable or parameter missing | Fail closed | `500` |
 | GitHub `401`/`403` (auth or permissions) | Log `github.auth_failed`, no retry | `500` |
 | GitHub `422` on `REQUEST_CHANGES` for own PR | Retry once as `COMMENT` (FR-010) | `200` |
-| GitHub `429` or `5xx` | One retry with short backoff if time allows, then fail | `500` |
+| GitHub `429`, `5xx` or no response | One retry after 1 s if time allows, then fail. POSTs are retried only on rate limits: a POST that got a `5xx` may already have created the review | `500` |
 | Gemini timeout, `429`, `5xx`, safety block, invalid JSON | AI-unavailable `COMMENT` (FR-008) | `200` |
 | Unexpected exception | Log type and delivery ID (no payload) | `500` |
 

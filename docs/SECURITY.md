@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — security design for implementation; **no controls are implemented yet** |
+| Status | Draft v0.1 — webhook verification, secret loading, secret scanning, review sanitisation, log redaction and duplicate handling implemented and tested in M2; **not deployed**; IAM and abuse controls arrive with T-401 |
 | Last updated | 2026-10-21 |
 | Owner | [@ChamathDilshanC](https://github.com/ChamathDilshanC) |
 | Related | [Architecture](ARCHITECTURE.md) · [AI system](AI_SYSTEM.md) · [Deployment](DEPLOYMENT.md) |
@@ -80,6 +80,7 @@ STRIDE categories: **S**poofing, **T**ampering, **R**epudiation, **I**nformation
 | TM-11 | T | Model output used for abuse (`@mention` spam, phishing links, oversized body) | Neutralise mentions; cap length; fixed template structure (FR-009) | Misleading prose inside the feedback section |
 | TM-12 | R | No trace of why a review was posted | Every log line carries `delivery_id`, repository, PR number, head SHA and decision; GitHub retains reviews | Log retention window (14 days proposed) |
 | TM-13 | D | External contributors open many PRs on a public repository and exhaust AI quota | Throttling; AI failures fail open; Phase 3 per-repository config can disable AI for forks | Quota exhaustion degrades reviews to scan-only |
+| TM-14 | S/T | A PR author posts their own review containing a copy of MergeGuard's hidden marker for the head SHA, so the duplicate check skips the real security review | A review counts as a duplicate only if its author is the token owner (`GET /user`), its `commit_id` matches, and it carries the marker (FR-014) | Phase 3 GitHub App tokens cannot call `GET /user`; the identity check must be redone then (ADR-0006) |
 
 ## 5. Controls by component
 
@@ -87,7 +88,7 @@ STRIDE categories: **S**poofing, **T**ampering, **R**epudiation, **I**nformation
 
 - Read the secret from SSM. If it is missing or empty, fail closed.
 - Decode the body exactly once: base64 if `isBase64Encoded`, otherwise UTF-8 bytes of `body`. Compute `"sha256=" + HMAC_SHA256(secret, body_bytes).hexdigest()`.
-- Compare with `hmac.compare_digest`. Never use `==`. Never short-circuit on header length.
+- Compare with `hmac.compare_digest`. Never use `==`. Never short-circuit on header length. Compare as bytes, so a non-ASCII header is rejected instead of raising.
 - Do not log the signature header or the body. Log `webhook.rejected` with `delivery_id` only.
 
 ### 5.2 GitHub token
