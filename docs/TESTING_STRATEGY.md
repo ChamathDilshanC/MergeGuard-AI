@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — unit, contract and integration tests for M1–M3 exist (Gemini mocked); Phase 2 (M5) adds queue, worker, commit status, dismissal and suppression tests, plus workflow and bootstrap checks; Phase 3 (M6) adds RS256 signing, GitHub App authentication, inline comment and repository configuration tests with fakes; AI evaluation (T-304, blocked on OQ-05) and E2E (needs a deployment, T-402) are not built yet |
+| Status | Draft v0.1 — unit, contract and integration tests for M1–M3 exist (Gemini mocked); Phase 2 (M5) adds queue, worker, commit status, dismissal and suppression tests, plus workflow and bootstrap checks; Phase 3 (M6) adds RS256 signing, GitHub App authentication, inline comment and repository configuration tests with fakes; AI evaluation (T-304, needs real calls with the paid-tier key, so only after deployment) and E2E (needs a deployment, T-402) are not built yet |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) · [Architecture](ARCHITECTURE.md) §13 · [Security](SECURITY.md) §8 · [AI system](AI_SYSTEM.md) §9 |
 

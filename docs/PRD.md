@@ -112,7 +112,7 @@ Status as of M2: "Verified (M2 tests)" means implemented and covered by the auto
 | Stale review dismissal | Verified (M5 tests; not deployed) | 2 | FR-018 |
 | Scanner suppressions | Verified (M5 tests; [ADR-0008](ADR/0008-scanner-suppressions-are-visible-and-withheld-from-ai.md)) | 2 | FR-019 |
 | GitHub App authentication | Verified (M6 tests with fakes, signer cross-checked with OpenSSL; not deployed) | 3 | FR-020 |
-| Inline line-level comments | Verified for secret findings (M6 tests); AI findings Verified by tests but **opt-in and unevaluated** (T-304, OQ-05) | 3 | FR-021 |
+| Inline line-level comments | Verified for secret findings (M6 tests); AI findings Verified by tests but **opt-in and unevaluated** (T-304 needs real calls with the paid-tier key, so only after deployment) | 3 | FR-021 |
 | Per-repository configuration | Verified (M6 tests; [ADR-0011](ADR/0011-repository-config-from-the-base-commit.md)) | 3 | FR-022 |
 
 ## 8. MVP scope
@@ -267,7 +267,7 @@ The policy is evaluated in code, never by the model:
 | --- | --- | --- |
 | One or more secret findings | `REQUEST_CHANGES` | Brief |
 | AI `risk_level` is `LOW` **and** `bugs_found` is 0 | `COMMENT` | Brief |
-| AI `risk_level` is `MEDIUM` or `HIGH`, **or** `bugs_found` > 0 | `REQUEST_CHANGES` | Brief ([OQ-04](#17-open-questions)) |
+| AI `risk_level` is `MEDIUM` or `HIGH`, **or** `bugs_found` > 0 | `REQUEST_CHANGES` | Brief ([OQ-04](#17-open-questions), pending T-304) |
 | AI unavailable or invalid | `COMMENT` | Proposed (FR-008) |
 | No reviewable patches | No review | Brief |
 | Any case | Never `APPROVE` | Proposed (§6.2) |
@@ -395,7 +395,7 @@ The policy is evaluated in code, never by the model:
 
 ### FR-021 — Inline line-level comments
 
-**Priority:** P2 · **Phase:** 3 · **Status:** Verified in code and tests (M6) for secret findings; AI findings are opt-in and their prompt is unevaluated (T-304 is blocked on OQ-05)
+**Priority:** P2 · **Phase:** 3 · **Status:** Verified in code and tests (M6) for secret findings; AI findings are opt-in and their prompt is unevaluated (T-304 needs real calls with the paid-tier key, so only after deployment)
 
 *Acceptance criteria:*
 
@@ -416,7 +416,7 @@ The policy is evaluated in code, never by the model:
    - ignored paths;
    - comment language.
 2. *(M6)* The file is read from the pull request's **base commit**, never its head, so a PR cannot change the rules that apply to it.
-3. *(M6)* Keys: `version` (1), `block_on` (`MEDIUM` or `HIGH`, within the operator's `repo_config_block_levels`), `ai_review` (false keeps the diff from the AI), `ignore_paths` (globs kept from the AI), `inline_comments` (`off`, `secrets`, `all`, never above the operator's mode) and `language` (`en` only until OQ-03 is decided). `block_on` relaxes only the AI risk-level threshold: AI bugs and secret findings still block.
+3. *(M6)* Keys: `version` (1), `block_on` (`MEDIUM` or `HIGH`, within the operator's `repo_config_block_levels`), `ai_review` (false keeps the diff from the AI), `ignore_paths` (globs kept from the AI), `inline_comments` (`off`, `secrets`, `all`, never above the operator's mode) and `language` (`en` only, decided in OQ-03). `block_on` relaxes only the AI risk-level threshold: AI bugs and secret findings still block.
 4. *(M6)* The file can never disable the secret scan or add suppressions. An unknown key, bad type, value outside the bounds, unsupported version, invalid JSON or a file over 16 KB makes the **whole file** ignored: the defaults apply and the review carries a notice with a reason category. A file that is applied is listed in the review. A missing file, or a token that cannot read contents, simply means the defaults.
 
 ## 10. Roles and permission boundaries
@@ -476,7 +476,7 @@ All targets are **Proposed** until the owner confirms them.
 | NFR-004 | Security | Least privilege for the Lambda role and the GitHub token | No wildcard account or region in IAM ARNs; token limited to selected repositories | Terraform review, checkov ([TESTING_STRATEGY.md](TESTING_STRATEGY.md) §5) |
 | NFR-005 | Privacy | No code persisted by MergeGuard; diffs with secret findings never leave AWS | 100% of secret-positive test cases make zero Gemini calls | Unit and integration tests |
 | NFR-006 | Privacy | No sensitive values in logs or comments | Zero occurrences in the redaction test suite | Log-redaction tests |
-| NFR-007 | Cost | Running cost at small-team scale | Within the owner's budget (TBD, [OQ-05](#17-open-questions)); AWS Budgets alert configured (written in M5; it exists once the owner sets `monthly_budget_usd` and `alert_email`) | AWS Cost Explorer |
+| NFR-007 | Cost | Running cost at small-team scale | Within the owner's budget (amounts set at deploy time, [OQ-05](#17-open-questions)); an AWS Budgets alert covering **AWS spend only** (written in M5; it exists once the owner sets `monthly_budget_usd` and `alert_email`) **and** a separate Google Cloud budget alert and quota for Gemini usage | AWS Cost Explorer |
 | NFR-008 | Maintainability | Zero runtime dependencies beyond stdlib and `boto3` | Lambda package contains first-party code only | Package inspection in CI |
 | NFR-009 | Maintainability | Automated test coverage of `src/` | ≥ 85% line coverage | `pytest --cov` in CI |
 | NFR-010 | Scalability | Concurrent PR events | Handles bursts of parallel deliveries; cost bounded by throttling and optional reserved concurrency | Load test (Phase 2) |
@@ -513,7 +513,7 @@ All targets are **Proposed** until the owner confirms them.
 | A-02 | A small number of repositories owned by the maintainer, each with a repository-level webhook |
 | A-03 | The bot uses a fine-grained personal access token in Phase 1 |
 | A-04 | Most PR diffs fit within 12,000 characters; larger ones get a partial AI review |
-| A-05 | Review comments are written in English ([OQ-03](#17-open-questions)) |
+| A-05 | Review comments are written in English (decided, [OQ-03](#17-open-questions)) |
 | A-06 | The Python 3.12 Lambda runtime continues to bundle `boto3` |
 | A-07 | The chosen Gemini model supports JSON output mode and response schemas |
 
@@ -523,8 +523,8 @@ All targets are **Proposed** until the owner confirms them.
 | --- | --- | --- | --- | --- |
 | R-01 | Synchronous AI call exceeds GitHub's 10 s webhook timeout | High | Medium — deliveries show as failed; a review may still post | Phase 2 async processing (FR-016, ADR-0005) |
 | R-02 | Prompt injection in a diff manipulates the AI verdict | Medium | Medium — a misleading "LOW" review | Policy in code, no `APPROVE`, untrusted-data prompting, human merge decision ([SECURITY.md](SECURITY.md) TM-03) |
-| R-03 | Noisy or wrong AI feedback erodes trust | Medium | Medium | Evaluation set, tuned prompt, OQ-04 threshold decision |
-| R-04 | Proprietary code sent to an AI provider under unsuitable data terms | Medium | High | Secret gate first; owner decides on tier ([OQ-05](#17-open-questions)); documented in [AI_SYSTEM.md](AI_SYSTEM.md) §3 |
+| R-03 | Noisy or wrong AI feedback erodes trust | Medium | Medium | Evaluation set, tuned prompt, OQ-04 threshold decision (pending T-304) |
+| R-04 | Proprietary code sent to an AI provider under unsuitable data terms | Medium | High | Secret gate first; paid tier decided ([OQ-05](#17-open-questions)), and the owner reads Google's current terms before the key is stored; documented in [AI_SYSTEM.md](AI_SYSTEM.md) §3 |
 | R-05 | Over-privileged or expired GitHub token | Medium | High / Medium | Fine-grained token, minimal permissions, expiry tracking, rotation runbook |
 | R-06 | Own-PR `422` when the token owner is the author (typical for demos) | High | Low | FR-010 fallback; dedicated bot identity or GitHub App (ADR-0006) |
 | R-07 | Cost abuse via the public endpoint | Low | Medium | Cheap `401` path, API throttling, AWS Budgets alert |
@@ -533,18 +533,20 @@ All targets are **Proposed** until the owner confirms them.
 
 ## 17. Open questions
 
+Answers are recorded here, as [T-002](TASKS.md) requires, and then carried into the documents they affect. A row marked **Resolved** is decided; **Pending** means the proposed default stands until the named task.
+
 | ID | Question | Needed by |
 | --- | --- | --- |
 | OQ-01 | **Resolved 2026-10-21:** product name is MergeGuard AI; repository `ChamathDilshanC/MergeGuard-AI`, private | M1 |
 | OQ-02 | Who is the primary audience: personal or portfolio use, small teams, or organisation-wide? | M1 |
-| OQ-03 | Comment language: English only, or optional Sinhala as in the brief's alert text? | M2 |
-| OQ-04 | Should AI `MEDIUM` risk request changes, or only `HIGH`? | M3 |
-| OQ-05 | Gemini free or paid tier, given data-use terms and rate limits? Monthly cost budget? | M3 |
-| OQ-06 | Bot identity for Phase 1: personal token or a dedicated machine account? | M4 |
+| OQ-03 | **Resolved 2026-10-22:** English only. The brief's Sinhala alert text is not carried over. `language` in the repository configuration accepts only `en`; a second language would be a new set of templates and a new decision (A-05, [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) §11) | M2 |
+| OQ-04 | **Pending T-304 (the proposed default stands):** should AI `MEDIUM` risk request changes, or only `HIGH`? Until the AI evaluation, `MEDIUM` and `HIGH` request changes, as in the brief (`policy.COMMENT_ONLY_RISK_LEVELS`). A repository may relax this to `HIGH` through `block_on`, within the operator's bounds (FR-022) | M3 |
+| OQ-05 | **Resolved 2026-10-22:** paid Gemini tier. Under Google's published terms, content sent to unpaid tiers may be used to improve Google's products, and these prompts hold private code diffs. Before the key is stored: billing is enabled on the Google Cloud project that owns it, and Google's current paid-tier data terms are read. Cost control is **two separate things**: the AWS Budgets alert (`monthly_budget_usd`) covers **AWS spend only** and sees no Gemini cost; Gemini needs its own **Google Cloud budget alert and a quota** on that project. A budget alerts and does not cap; a quota limits requests. The amounts are the owner's, set at deploy time ([DEPLOYMENT.md](DEPLOYMENT.md) §3.3) | M3 |
+| OQ-06 | **Resolved 2026-10-22:** GitHub App, **staged**. Create the App and prove it on a throwaway repository first, then move real repositories to it. Until the App is confirmed, keep the personal access token (preferably a dedicated machine account, which also avoids the own-PR `422`) as a working fallback. Switching is the `github_app_id` setting ([ADR-0006](ADR/0006-github-identity-pat-then-app.md), [ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md)) | M4 |
 | OQ-07 | AWS provider major version: keep `~> 5.0` (brief) or adopt the current major? | M1 |
-| OQ-08 | Terraform state: local for the demo, or a remote S3 backend from the start? | M1 |
+| OQ-08 | **Resolved 2026-10-22:** remote S3 state from the first deploy, in the bucket created by the bootstrap stack and deployed by the OIDC role ([ADR-0009](ADR/0009-ci-deploy-with-oidc-and-opt-in-remote-state.md)). Apply the bootstrap stack by hand first, so there is no local state to migrate, and keep exactly one place that applies the stack | M1 |
 | OQ-09 | Review draft PRs or skip them until ready? | M2 |
-| OQ-10 | Deployment region: keep `us-east-1`? | M4 |
+| OQ-10 | **Resolved 2026-10-22:** keep `us-east-1`. The deploy role, the bootstrap stack and the main stack must all use the same region ([DEPLOYMENT.md](DEPLOYMENT.md) §8.1) | M4 |
 | OQ-11 | Licence for the repository (none present)? | M1 |
 
 ## 18. Roadmap

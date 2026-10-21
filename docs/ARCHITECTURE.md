@@ -19,7 +19,7 @@ This document describes how MergeGuard AI is built. It covers the **Phase 1 (MVP
 - **M4** added the Terraform stack (T-401): IAM, Lambda, HTTP API, log groups and SSM placeholders. It is checked by a mocked-provider plan test and has never been applied.
 - **M5** added the Phase 2 pieces: the receiver/worker split with an SQS queue and dead-letter queue (T-501), the `mergeguard/review` commit status (T-502), dismissal of stale blocking reviews (T-503), scanner suppressions (T-504), a bootstrap stack and an OIDC deploy workflow for remote state (T-505), and alarms and a budget alert (T-506). All of it is tested with fakes and mocked providers; the deploy workflow has never run.
 - **M6** added the Phase 3 pieces: GitHub App authentication with installation tokens and a pure-Python RS256 signer (T-601, [ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md)), inline line-level comments for secret findings and, opt-in, AI findings (T-602), and per-repository configuration read from the base commit (T-603, [ADR-0011](ADR/0011-repository-config-from-the-base-commit.md)). All of it is tested with fakes; nothing is deployed.
-- **Not yet built:** the AI evaluation (T-304, blocked on OQ-05) and any deployment (T-402). Component names below come from the brief (Planned) or are recommendations (Proposed).
+- **Not yet built:** the AI evaluation (T-304, which needs real Gemini calls with the paid-tier key, so only after deployment) and any deployment (T-402). Component names below come from the brief (Planned) or are recommendations (Proposed).
 
 ## 2. System context
 
@@ -350,7 +350,7 @@ Summary only; see [TESTING_STRATEGY.md](TESTING_STRATEGY.md).
 
 ## 14. Deployment topology
 
-One AWS account and region (default `us-east-1`): the receiver Lambda behind one HTTP API, the review queue with its dead-letter queue, the worker Lambda, and the alarms. Each target repository has a webhook pointing at the same URL with the same secret. Terraform runs from the maintainer's machine with local state, or from CI with remote state in S3 (opt-in, [ADR-0009](ADR/0009-ci-deploy-with-oidc-and-opt-in-remote-state.md); OQ-08 stays open). It also creates the three SSM parameters as placeholders and an API Gateway access log group. Step-by-step instructions are in [DEPLOYMENT.md](DEPLOYMENT.md).
+One AWS account and region (`us-east-1`, decided in OQ-10): the receiver Lambda behind one HTTP API, the review queue with its dead-letter queue, the worker Lambda, and the alarms. Each target repository has a webhook pointing at the same URL with the same secret. Terraform state is remote in S3 from the first deploy (decided, OQ-08): the maintainer applies the bootstrap stack once, and the Deploy workflow applies the stack from CI ([ADR-0009](ADR/0009-ci-deploy-with-oidc-and-opt-in-remote-state.md)). It also creates the three SSM parameters as placeholders and an API Gateway access log group. Step-by-step instructions are in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## 15. Target architecture (Phase 2 and 3)
 

@@ -306,7 +306,7 @@ One JSON object per line. Field names are `snake_case`.
 
 ## 11. Localisation
 
-English is the default and only language in Phase 1 (PRD A-05). The brief's security alert was written in Sinhala, so whether to offer a Sinhala variant is an open question ([OQ-03](PRD.md#17-open-questions)). Templates are kept as named strings to make a later `MERGEGUARD_COMMENT_LANGUAGE` setting (Proposed, Phase 3 via FR-022) straightforward. Model output language would follow the prompt.
+English is the only language ([OQ-03](PRD.md#17-open-questions), decided 2026-10-22; PRD A-05). The brief's security alert was written in Sinhala; that text is not carried over. Templates are kept as named strings, so a second language would be a new set of templates and a new decision, and the repository configuration's `language` key accepts only `en` until then. Model output language follows the prompt.
 
 ## 12. Consistency checks
 

@@ -179,7 +179,7 @@ Dismissing a review on a protected branch can additionally require the token own
 
 ## 4. Outbound — Google Gemini API
 
-**Status:** Implemented in M3, with the key moved into a header (RB-07). Tested only against mocked responses; no real call has been made yet (OQ-05).
+**Status:** Implemented in M3, with the key moved into a header (RB-07). Tested only against mocked responses; no real call has been made yet (the paid-tier key decided in OQ-05 is stored only at deployment).
 
 | Item | Value |
 | --- | --- |

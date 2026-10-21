@@ -35,3 +35,7 @@ FR-022 lets a repository tune MergeGuard with a JSON file, `.github/mergeguard.j
 - A configuration change takes effect once it is merged into the base branch, not on the PR that proposes it. That is the intended trade-off.
 - Reading it costs one extra `GET /pulls/{n}` call in inline mode (the worker already makes it) and one contents call, and needs the token or App permission *Contents: read*.
 - `ignore_paths` can reduce AI coverage; the review says that a repository configuration was applied.
+
+## Update (2026-10-22)
+
+[OQ-03](../PRD.md#17-open-questions) is resolved: English only. `language` therefore accepts only `en` by decision, not as a placeholder.

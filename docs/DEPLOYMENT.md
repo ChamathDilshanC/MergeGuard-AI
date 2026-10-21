@@ -12,7 +12,7 @@ This guide turns the brief's four deployment steps into a repeatable procedure w
 
 | Environment | Purpose | Phase |
 | --- | --- | --- |
-| `sandbox` | One AWS account and region (default `us-east-1`), webhook on a sandbox repository | 1 |
+| `sandbox` | One AWS account and region (`us-east-1`, decided in [OQ-10](PRD.md#17-open-questions)), webhook on a sandbox repository | 1 |
 | `production` | Webhook on real repositories; deployed from CI with approval | 2 (workflow written in M5, never run; §8) |
 
 In Phase 1 the sandbox stack may also serve the maintainer's real repositories, once the MVP exit criteria (PRD §8) pass.
@@ -25,7 +25,7 @@ In Phase 1 the sandbox stack may also serve the maintainer's real repositories, 
 | AWS CLI | v2 recommended. Credentials configured for the target account |
 | Terraform | `>= 1.11, < 2.0` (`terraform/versions.tf`); 1.11 adds the write-only arguments that keep secrets out of state (ADR-0007). CI uses 1.16.5 |
 | GitHub | Admin rights on each target repository (to add a webhook) |
-| Google AI Studio account | To create a Gemini API key; tier per [OQ-05](PRD.md#17-open-questions) |
+| Google Cloud project with billing enabled | For a Gemini API key on the **paid tier** ([OQ-05](PRD.md#17-open-questions), decided), plus a budget alert and a quota on that project (§3.3) |
 | Python 3.12 | Only for development and tests |
 
 **Cost note:** at small scale, the design keeps AWS usage within low-cost service tiers. Free-tier eligibility depends on the account's plan and age, so check the AWS Free Tier page for your account. Gemini pricing and quotas are separate.
@@ -48,8 +48,8 @@ Until step 3, the Lambda treats each parameter as not set: every delivery gets `
    - **Repository access:** *Only select repositories*.
    - **Permissions:** *Pull requests: Read and write*, *Contents: Read-only*, *Commit statuses: Read and write*. *Metadata: Read* is added automatically. The statuses permission is needed while `commit_status_enabled` is true, which is the Terraform default; without it every status call is refused and logged (`status.failed`), and the reviews still work.
    - To let MergeGuard dismiss its old blocking reviews on a **protected branch**, the token owner must be allowed to dismiss reviews in the branch rule. Otherwise GitHub refuses and MergeGuard logs `review.dismissal_failed`.
-   - Prefer a dedicated machine account ([OQ-06](PRD.md#17-open-questions)). If the PR author owns the token, GitHub refuses `REQUEST_CHANGES` and MergeGuard falls back to a comment (FR-010).
-2. **Gemini API key.** Go to Google AI Studio → *Get API key* and create a key.
+   - The GitHub App (§3.4) is the target identity ([OQ-06](PRD.md#17-open-questions), decided: staged). This token is the **fallback** until the App is confirmed, so use a dedicated machine account for it. If the PR author owns the token, GitHub refuses `REQUEST_CHANGES` and MergeGuard falls back to a comment (FR-010).
+2. **Gemini API key.** Create it in Google AI Studio → *Get API key*, attached to a Google Cloud project with **billing enabled** (the paid tier; see §3.3 before storing it).
 3. **Webhook secret.** Generate a random value. Do not invent a memorable one.
 
    ```bash
@@ -84,11 +84,20 @@ Remove-Variable v
 
 **Never run `terraform import` on these parameters.** An import reads the real value into Terraform state and its backups (ADR-0007). Terraform writes only the placeholder and never reads the real value back.
 
-### 3.3 The Gemini key and OQ-05
+### 3.3 The Gemini key, the paid tier and its budget (OQ-05)
+
+The tier is decided ([OQ-05](PRD.md#17-open-questions), 2026-10-22): the **paid tier**. Under Google's published terms, content sent to unpaid tiers may be used to improve Google's products, and these prompts hold private code diffs.
 
 You can leave `/mergeguard/gemini_api_key` as the placeholder. MergeGuard then still runs the secret scan, posts *AI review unavailable (not_configured)* on clean PRs, and **sends no diff to Gemini**.
 
-Store the real key only after the Gemini tier is decided ([OQ-05](PRD.md#17-open-questions)), because from then on live PR diffs go to Google.
+Store the real key only when all of these are done, because from then on live PR diffs go to Google:
+
+1. **Billing is enabled** on the Google Cloud project that owns the key, so the paid tier applies.
+2. **Google's current paid-tier data terms are read.** They change, so check them at that time rather than relying on this guide.
+3. **A budget alert exists for Gemini** (Google Cloud console → *Billing* → *Budgets & alerts*, scoped to that project). A budget **alerts; it does not stop spending**.
+4. **A quota is set** on the Gemini (Generative Language) API for that project (*APIs & Services* → *Quotas*). A quota is what actually limits requests.
+
+The AWS budget in §4 (`monthly_budget_usd`) covers **AWS spend only**. It cannot see Gemini usage, so it is not a substitute for steps 3 and 4. The amounts are your decision; they are not set in this repository.
 
 ### 3.4 Optional: authenticate as a GitHub App (FR-020)
 
@@ -131,9 +140,9 @@ These variables live in `terraform/variables.tf` and are used by `terraform/main
 | `commit_status_enabled` | `true` | Sets the `mergeguard/review` status → `MERGEGUARD_COMMIT_STATUS`. Needs the token's *Commit statuses* permission (§3.1) |
 | `scan_allow_paths` | `[]` | Path globs whose findings are suppressed and listed in the review, for example `["tests/fixtures/**"]` → `MERGEGUARD_SCAN_ALLOW_PATHS`. Operator-only; a bare wildcard is rejected |
 | `alert_email` | unset | Address for alarm and budget notifications. AWS sends a confirmation email that must be accepted |
-| `monthly_budget_usd` | unset | Monthly cost budget in USD. **Unset creates no budget**: the amount is the owner's decision ([OQ-05](PRD.md#17-open-questions)). Needs `alert_email` |
+| `monthly_budget_usd` | unset | Monthly **AWS** cost budget in USD. It covers AWS spend only and does **not** include Gemini (Google) usage, which needs its own Google Cloud budget alert and quota (§3.3). A budget alerts; it does not cap spending. **Unset creates no budget**: the amount is the owner's decision ([OQ-05](PRD.md#17-open-questions)), set in `terraform.tfvars` at deploy time. Needs `alert_email` |
 | `github_app_id` | unset | GitHub App ID or client ID → `MERGEGUARD_GITHUB_APP_ID`. Unset keeps the personal access token. The private key is the `github_app_private_key` SSM parameter (§3.4) |
-| `inline_comments` | `secrets` | `off`, `secrets` or `all` → `MERGEGUARD_INLINE_COMMENTS`. `secrets` posts inline comments for secret findings only. `all` also asks the model for per-line findings with the longer `review-v2` prompt, which has **not been evaluated** (T-304, [OQ-05](PRD.md#17-open-questions)); try it on a sandbox repository first |
+| `inline_comments` | `secrets` | `off`, `secrets` or `all` → `MERGEGUARD_INLINE_COMMENTS`. `secrets` posts inline comments for secret findings only. `all` also asks the model for per-line findings with the longer `review-v2` prompt, which has **not been evaluated** (T-304 needs real calls with the paid-tier key, so only after deployment); try it on a sandbox repository first |
 | `repo_config_enabled` | `true` | Read `.github/mergeguard.json` from the pull request's base commit → `MERGEGUARD_REPO_CONFIG`. Needs *Contents: Read* (§4.1) |
 | `repo_config_block_levels` | `["MEDIUM", "HIGH"]` | The levels a repository file may choose for `block_on` → `MERGEGUARD_REPO_CONFIG_BLOCK_LEVELS`. `["MEDIUM"]` forbids relaxing the default |
 | `log_retention_days` | `14` | CloudWatch retention |
@@ -170,11 +179,13 @@ Optional, JSON, at `.github/mergeguard.json` in the **base branch** of the repos
 | `ai_review` | `false` keeps this repository's diffs from the AI (nothing is posted when the scan is clean) | — |
 | `ignore_paths` | Globs kept from the AI. They are still scanned for secrets | At most 50, relative, not only wildcards |
 | `inline_comments` | `off`, `secrets` or `all` | Never above the operator's mode |
-| `language` | `en` | Only `en` until [OQ-03](PRD.md#17-open-questions) is decided |
+| `language` | `en` | Only `en`: English only is decided ([OQ-03](PRD.md#17-open-questions)) |
 
 It cannot disable the secret scan or add suppressions. Any invalid key or value makes the **whole file** ignored: the defaults apply and the review says so, with a reason (`invalid_json`, `too_large`, `unknown_key`, `unsupported_version`, `invalid_field` or `out_of_bounds`). Keep it under 16 KB.
 
 ## 5. Deploy
+
+**Remote state from the first deploy ([OQ-08](PRD.md#17-open-questions), decided 2026-10-22).** Do the one-time setup of §8.1 first (the bootstrap stack, the repository variables, the two environments), then deploy with the **Deploy workflow**. That way the state is in S3 from the start and there is nothing to migrate. The local commands below show what a plan review looks like and remain the way to run `terraform test` and `plan` without applying; apply from only one place, either CI or your machine.
 
 ```bash
 terraform -chdir=terraform init
@@ -238,13 +249,21 @@ aws logs tail /aws/lambda/mergeguard-ai-pr-worker --follow --region us-east-1   
 | `deploy.yml` | **Manual** (`workflow_dispatch`), on `main` only. A `plan` job in the `production-plan` environment saves a plan and prints it to the job summary. An `apply` job in the `production` environment, which needs required reviewers, applies exactly that plan |
 | AWS credentials in CI | GitHub OIDC to the role `mergeguard-github-deploy`, which only this repository's two environments can assume. No long-lived keys in GitHub; the workflow holds only non-secret identifiers as repository variables |
 | Actions supply chain | Third-party actions pinned to full commit SHAs, checked by a test |
-| Terraform state | S3 bucket with versioning, default encryption, public access blocked and TLS-only access. Locking uses the S3 backend's native lock file (`use_lockfile`, Terraform 1.11 or later). **Opt-in:** local state stays the default, and CI selects the S3 backend at run time ([ADR-0009](ADR/0009-ci-deploy-with-oidc-and-opt-in-remote-state.md)). [OQ-08](PRD.md#17-open-questions) stays open |
+| Terraform state | S3 bucket with versioning, default encryption, public access blocked and TLS-only access. Locking uses the S3 backend's native lock file (`use_lockfile`, Terraform 1.11 or later). **Decided ([OQ-08](PRD.md#17-open-questions), 2026-10-22): remote state from the first deploy.** The backend is selected at run time, not in `versions.tf` ([ADR-0009](ADR/0009-ci-deploy-with-oidc-and-opt-in-remote-state.md)), so the order matters: bootstrap first |
 
 The residual risks (the plan job can also apply, the role can create `mergeguard_*` IAM roles, the provider reads the real SSM values while it refreshes) are in [SECURITY.md](SECURITY.md) §5.10.
 
 ### 8.1 One-time setup (maintainer)
 
 None of this has been run. Review each step before running it.
+
+**Order for the first deployment** (decisions of 2026-10-22: OQ-05, OQ-06, OQ-08, OQ-10):
+
+1. Steps 1 to 4 below, in `us-east-1` ([OQ-10](PRD.md#17-open-questions)): the state bucket and deploy role, the repository variables, the two environments, and branch protection.
+2. Run the Deploy workflow (step 6). The stack is created with placeholder secrets and is inert.
+3. Store the real secrets (§3.2): the webhook secret, and the fallback personal access token. Store the Gemini key only after §3.3 is complete.
+4. Create the GitHub App on a **throwaway repository** and prove it there (§3.4, [OQ-06](PRD.md#17-open-questions)); keep the personal token working until it is confirmed.
+5. Run the checks of §7 and [TESTING_STRATEGY.md](TESTING_STRATEGY.md) §7.
 
 1. **Create the state bucket and the deploy role** with the bootstrap stack. It uses local state, which you keep, and CI never applies it.
 
@@ -261,7 +280,7 @@ None of this has been run. Review each step before running it.
 2. **Set three repository variables** (*Settings → Secrets and variables → Actions → Variables*; none of them is a secret): `AWS_DEPLOY_ROLE_ARN` (output `deploy_role_arn`), `AWS_REGION`, and `TF_STATE_BUCKET` (output `state_bucket_name`).
 3. **Create two environments** (*Settings → Environments*): `production-plan` with no reviewers, and `production` with **required reviewers**. Limit both to the `main` branch (*Deployment branches*). The names must match the bootstrap variables `plan_environment` and `apply_environment`.
 4. **Protect `main`**: require pull requests and the CI checks. This closes most of TM-16.
-5. **If the stack already exists in local state, migrate it first**, or the first CI deploy will plan to create everything again:
+5. **Only if the stack was already applied from a local state file, migrate it first**, or the first CI deploy will plan to create everything again. Following the order above, this step is not needed:
 
    ```bash
    cat > terraform/backend_override.tf <<'EOF'

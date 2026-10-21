@@ -32,3 +32,7 @@ The brief authenticates to GitHub with a fine-grained personal access token (PAT
 
 - Phase 1 stays simple, at the cost of the fallback behaviour and manual token rotation.
 - Phase 3 needed a new ADR that settles the JWT signing choice above and the App permission set: [ADR-0010](0010-github-app-jwt-signing-without-dependencies.md) chose pure-Python RS256 with the permission set `pull_requests: write`, `contents: read` and `statuses: write`. The personal access token remains the default when no App ID is set.
+
+## Update (2026-10-22)
+
+[OQ-06](../PRD.md#17-open-questions) is resolved: the GitHub App is the target identity, **staged**. It is created and proven on a throwaway repository first, and the personal access token stays configured as a working fallback (preferably a dedicated machine account) until the App is confirmed. This confirms the order of this ADR (token first, App later) and does not change its decision.

@@ -38,3 +38,7 @@ DEPLOYMENT.md §8 asks for deployment from CI with approval, no long-lived AWS k
 - The plan job holds a role that can also apply. Anyone who can change the workflow on `main` could bypass the approval, so `main` needs branch protection and both environments need a main-only deployment branch rule. This is TM-16.
 - The deploy role can read the real SSM values through the AWS provider's refresh, because the provider reads each managed parameter. They stay out of state and logs (ADR-0007) but not out of the runner's memory. Recorded in [SECURITY.md](../SECURITY.md) §5.10.
 - Nothing here has run. The workflow is checked with `actionlint` and static tests, and the bootstrap stack with credential-free plan tests. The first real run is part of T-402.
+
+## Update (2026-10-22)
+
+[OQ-08](../PRD.md#17-open-questions) is resolved: the S3 state bucket from the bootstrap stack is used **from the first deploy**. The mechanism above is unchanged (no backend block in `versions.tf`; the workflow selects S3 at run time), so the choice is made by order of operations: apply the bootstrap stack by hand first, then deploy through the workflow, and there is no local state to migrate. The migration step in DEPLOYMENT.md §8.1 stays only for a stack that was applied locally anyway.

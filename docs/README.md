@@ -12,7 +12,7 @@ Documentation for MergeGuard AI, a serverless DevSecOps pull-request reviewer. F
 | **Assumption** | Treated as true for planning; must be validated |
 | **Open** / **TBD** | Undecided; tracked as `OQ-` items in [PRD.md](PRD.md) §17 |
 
-As of 2026-10-21, M1 to M6 are Verified by automated tests: Gemini is mocked, SQS and GitHub are faked, and the Terraform plans are tested against a mocked AWS provider. **Nothing is deployed**, the CI deploy workflow has never run, and no real Gemini call has been made (OQ-05). Properties that need AWS (acknowledgement latency, alarms firing, the deploy itself) are Planned until T-402 and T-403.
+As of 2026-10-21, M1 to M6 are Verified by automated tests: Gemini is mocked, SQS and GitHub are faked, and the Terraform plans are tested against a mocked AWS provider. **Nothing is deployed**, the CI deploy workflow has never run, and no real Gemini call has been made (the paid tier is decided in OQ-05, 2026-10-22, but no key is stored). The decisions on language, Gemini tier and budget, bot identity, state backend and region are recorded in [PRD.md](PRD.md) §17. Properties that need AWS (acknowledgement latency, alarms firing, the deploy itself) are Planned until T-402 and T-403.
 
 ## Core documents
 
