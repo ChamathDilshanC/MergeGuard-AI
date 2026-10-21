@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — unit, contract and integration tests for M1–M2 exist; AI evaluation (M3) and E2E (M4) are not built yet |
+| Status | Draft v0.1 — unit, contract and integration tests for M1–M3 exist (Gemini mocked); AI evaluation (T-304, blocked on OQ-05) and E2E (M4) are not built yet |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) · [Architecture](ARCHITECTURE.md) §13 · [Security](SECURITY.md) §8 · [AI system](AI_SYSTEM.md) §9 |
 
@@ -36,7 +36,7 @@ Target ratio: mostly unit tests, a focused contract and integration layer, and a
   | --- | --- |
   | `webhooks/pull_request_opened.json`, `ping.json`, `issues_opened.json` | Trimmed GitHub payloads. Variants (other actions, drafts, bad fields) are derived in tests with `support.pull_request_payload(...)` |
   | GitHub files, reviews and user responses | Built in tests with `support.json_response` and `support.file_entry`, so each test shows the data it depends on |
-  | `gemini/*.json` | Recorded Gemini responses (M3) |
+  | `gemini/ok_low.json`, `ok_high.json`, `invalid_json.json`, `schema_mismatch.json`, `blocked.json` | Gemini responses in the real response shape (M3). Other variants are built with `support.gemini_response(...)` |
 
 - Fixtures must be **sanitised**: no real tokens, private repository names, or personal data. Use `owner/repo` and `octocat`.
 - Webhook signatures in tests are computed at test time with a test-only secret. Never disable verification to make a test pass.

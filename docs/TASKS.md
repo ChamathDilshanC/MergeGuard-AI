@@ -60,7 +60,7 @@
 
 **M2 notes:**
 
-- **No AI step yet.** With a clean scan, M2 posts nothing and answers `skipped` / `ai_not_enabled` ([API_SPEC.md](API_SPEC.md) §2.3). M3 inserts the AI review between the scan and the decision.
+- **No AI step yet.** With a clean scan, M2 posted nothing and answered `skipped` / `ai_not_enabled`. M3 replaced this with the AI review.
 - **Duplicate check verifies the reviewer identity** (`GET /user`) as well as the marker and SHA, so a copied marker cannot suppress a security review ([SECURITY.md](SECURITY.md) TM-14).
 - **POSTs are not retried on `5xx`,** because the review may already exist ([API_SPEC.md](API_SPEC.md) §3.2).
 - **Open questions:** draft PRs are skipped (the documented proposal for OQ-09, a single constant in `webhook.py`). Comments are English only (OQ-03). AI `MEDIUM` requests changes, as in the brief (OQ-04, exercised from M3). None of these blocked M2, and none is settled.
@@ -70,10 +70,18 @@
 
 | ID | Task | Requirements | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- |
-| T-301 | Gemini client with header auth and deadline-based timeout | FR-007, RB-07, RB-08 | T-204 | Contract tests with recorded responses; key never in URL (asserted) | Not started |
-| T-302 | Prompt v1, boundary markers, response schema, diff truncation | FR-007, RB-18 | T-301 | ST-08 passes; truncation unit tests; `N-PARTIAL-DIFF` rendered | Not started |
-| T-303 | Output validation and fail-open path | FR-008, RB-09 | T-302 | Each failure row in [AI_SYSTEM.md](AI_SYSTEM.md) §8 has a test that yields `T-AIU` | Not started |
-| T-304 | AI evaluation set and runner | [AI_SYSTEM.md](AI_SYSTEM.md) §9 | T-302 | About 30 labelled cases; first run meets gates or the gaps are documented; OQ-04 and OQ-05 answered | Not started |
+| T-301 | Gemini client with header auth and deadline-based timeout | FR-007, RB-07, RB-08 | T-204 | Contract tests with recorded responses; key never in URL (asserted) | Done |
+| T-302 | Prompt v1, boundary markers, response schema, diff truncation | FR-007, RB-18 | T-301 | ST-08 passes; truncation unit tests; `N-PARTIAL-DIFF` rendered | Done |
+| T-303 | Output validation and fail-open path | FR-008, RB-09 | T-302 | Each failure row in [AI_SYSTEM.md](AI_SYSTEM.md) §8 has a test that yields `T-AIU` | Done |
+| T-304 | AI evaluation set and runner | [AI_SYSTEM.md](AI_SYSTEM.md) §9 | T-302 | About 30 labelled cases; first run meets gates or the gaps are documented; OQ-04 and OQ-05 answered | Blocked (needs real Gemini calls; OQ-05) |
+
+**M3 notes:**
+
+- **Mocked only.** No real Gemini call was made, because the tier is undecided (OQ-05). All tests use mocked or recorded responses.
+- **OQ-04 not settled.** The documented default is in a named constant (`policy.COMMENT_ONLY_RISK_LEVELS`): only `LOW` with 0 bugs is a plain comment.
+- **Fail-safe.** Every Gemini failure gives the `T-AIU` comment and never `REQUEST_CHANGES`. If the policy ever gets neither a review nor a failure reason, it still comments (`unavailable`) rather than staying silent. The M2 `ai_not_enabled` skip is gone.
+- **Gemini key.** It is read from SSM in its own call, only when an AI review runs, so a missing key cannot break the secret gate.
+- **Two new failure reasons:** `not_configured` (missing key) and `diff_too_large` (nothing fits the budget). See [AI_SYSTEM.md](AI_SYSTEM.md) §8.
 
 ## M4 — Infrastructure and demo (MVP exit)
 

@@ -9,7 +9,7 @@
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) · [API spec](API_SPEC.md) · [Security](SECURITY.md) · [Tasks](TASKS.md) |
 
-> **Implementation status:** M1 (skeleton, tooling, CI) and M2 (webhook pipeline without AI) are implemented and tested. The AI review (M3), AWS resources (T-401) and any deployment do not exist yet. Section 7 shows the status of each capability — see the [status legend](README.md#status-legend).
+> **Implementation status:** M1 (skeleton, tooling, CI), M2 (webhook pipeline) and M3 (Gemini review, tested with mocked responses only) are implemented. AWS resources (T-401), the AI evaluation (T-304) and any deployment do not exist yet. Section 7 shows the status of each capability — see the [status legend](README.md#status-legend).
 
 ---
 
@@ -98,8 +98,8 @@ Status as of M2: "Verified (M2 tests)" means implemented and covered by the auto
 | Changed-file retrieval with pagination | Verified (M2 tests) | 1 | FR-004 |
 | Deterministic secret scan | Verified (M2 tests) | 1 | FR-005 |
 | Secret-leak gate (no AI egress) | Verified (M2 tests) | 1 | FR-006 |
-| AI review with structured output | Planned (brief) | 1 | FR-007 |
-| AI output validation and fail-open | Proposed | 1 | FR-008 |
+| AI review with structured output | Verified (M3 tests, mocked Gemini) | 1 | FR-007 |
+| AI output validation and fail-open | Verified (M3 tests, mocked Gemini) | 1 | FR-008 |
 | Review rendering and sanitisation | Verified (M2 tests) | 1 | FR-009 |
 | Review decision policy | Verified (M2 tests) | 1 | FR-010 |
 | Secrets in SSM Parameter Store | Loader Verified (M2 tests); IAM Planned (T-401) | 1 | FR-011 |
@@ -284,7 +284,7 @@ The policy is evaluated in code, never by the model:
 *Acceptance criteria:*
 
 1. Three `SecureString` parameters exist under the prefix `MERGEGUARD_PARAM_PREFIX` (default `/mergeguard`): `github_token`, `webhook_secret`, `gemini_api_key`.
-2. Values are loaded lazily with one `GetParameters` call and cached per execution environment (Proposed: 15-minute TTL so rotation needs no redeploy).
+2. The core secrets are loaded lazily with one `GetParameters` call and cached per execution environment with a 15-minute TTL, so rotation needs no redeploy. The Gemini key uses its own call, made only when an AI review runs (M3), so a missing key cannot block the secret gate.
 3. Values never appear in environment variables, Terraform code or state, logs, or source.
 4. IAM allows reading only these parameter ARNs, in the deployment account and region.
 

@@ -12,7 +12,7 @@ Documentation for MergeGuard AI, a serverless DevSecOps pull-request reviewer. F
 | **Assumption** | Treated as true for planning; must be validated |
 | **Open** / **TBD** | Undecided; tracked as `OQ-` items in [PRD.md](PRD.md) §17 |
 
-As of 2026-10-21, the M1 foundation and the M2 webhook pipeline (no AI) are Verified by automated tests. **Nothing is deployed**, and the AI review (M3) does not exist yet.
+As of 2026-10-21, M1 to M3 are Verified by automated tests, with Gemini mocked. **Nothing is deployed**, and no real Gemini call has been made (OQ-05).
 
 ## Core documents
 

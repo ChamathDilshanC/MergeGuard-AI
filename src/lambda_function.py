@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
+from mergeguard.ai_reviewer import GeminiReviewer
 from mergeguard.config import ConfigError, SecretStore, Settings
 from mergeguard.github_client import GitHubClient, GitHubError
 from mergeguard.http import Transport, urllib_transport
@@ -106,7 +107,8 @@ def _process(
     transport: Transport,
     log: JsonLogger,
 ) -> Outcome:
-    credentials = secrets(settings.param_prefix).get()  # fails closed (FR-011)
+    store = secrets(settings.param_prefix)
+    credentials = store.get()  # fails closed (FR-011)
     try:
         body = raw_body(event)
         authentic = verify_signature(
@@ -133,22 +135,40 @@ def _process(
     pr_log = log.bind(
         repo=pr.repo, pr=pr.number, head_sha=pr.short_sha, action=triaged.action
     )
+    seconds_left = _seconds_left(context)
     github = GitHubClient(
-        credentials.github_token, transport, has_time=_time_budget(context)
+        credentials.github_token, transport, has_time=_time_budget(seconds_left)
+    )
+    reviewer = GeminiReviewer(
+        store.gemini_api_key,  # read from SSM only when an AI review runs
+        transport,
+        model=settings.gemini_model,
+        max_diff_chars=settings.max_diff_chars,
+        time_left=seconds_left,
     )
     pipeline = ReviewPipeline(
-        github, pr_log, max_files=settings.max_files, dry_run=settings.dry_run
+        github,
+        reviewer,
+        pr_log,
+        max_files=settings.max_files,
+        dry_run=settings.dry_run,
     )
     return pipeline.run(pr)
 
 
-def _time_budget(context: Any) -> Callable[[float], bool]:
+def _seconds_left(context: Any) -> Callable[[], float | None]:
     remaining = getattr(context, "get_remaining_time_in_millis", None)
 
+    def seconds_left() -> float | None:
+        return None if remaining is None else remaining() / 1000
+
+    return seconds_left
+
+
+def _time_budget(seconds_left: Callable[[], float | None]) -> Callable[[float], bool]:
     def has_time(seconds: float) -> bool:
-        if remaining is None:
-            return True
-        return remaining() / 1000 > seconds + TIME_SAFETY_MARGIN_SECONDS
+        left = seconds_left()
+        return left is None or left > seconds + TIME_SAFETY_MARGIN_SECONDS
 
     return has_time
 

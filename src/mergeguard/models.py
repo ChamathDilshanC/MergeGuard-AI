@@ -38,8 +38,19 @@ class SecretFinding:
 
 
 @dataclass(frozen=True, slots=True)
+class DiffBundle:
+    """The size-limited diff sent to the AI (docs/AI_SYSTEM.md section 6)."""
+
+    text: str
+    included_files: tuple[str, ...]  # sent in full
+    omitted_files: tuple[str, ...]  # not sent, or only partly sent
+    truncated: bool
+    max_chars: int  # the budget the bundle was built under
+
+
+@dataclass(frozen=True, slots=True)
 class AIReview:
-    """Validated AI review output (docs/AI_SYSTEM.md section 5). Produced from M3."""
+    """Validated AI review output (docs/AI_SYSTEM.md section 5)."""
 
     risk_level: str
     bugs_found: int

@@ -17,9 +17,10 @@ As of 2026-10-21 the repository contains:
 
 - the documentation;
 - the **M1 foundation**: tooling, a Terraform skeleton without resources, and CI;
-- the **M2 webhook pipeline without AI**: signature check, event triage, secret scanner, decision policy, review posting with the own-PR fallback, duplicate prevention, dry run and structured logs, all with tests.
+- the **M2 webhook pipeline**: signature check, event triage, secret scanner, decision policy, review posting with the own-PR fallback, duplicate prevention, dry run and structured logs;
+- the **M3 Gemini review** after a clean scan, tested with mocked responses only. Never make real Gemini calls until OQ-05 is decided.
 
-**Nothing is deployed.** The AI review (M3) and Terraform resources (T-401) do not exist yet; see [docs/TASKS.md](docs/TASKS.md). Do not describe features as implemented until code and tests exist.
+**Nothing is deployed.** Terraform resources (T-401) and the AI evaluation (T-304) do not exist yet; see [docs/TASKS.md](docs/TASKS.md). Do not describe features as implemented until code and tests exist.
 
 ## 3. Orientation and directory ownership
 
@@ -29,8 +30,8 @@ As of 2026-10-21 the repository contains:
 | `AGENTS.md`, `CONTRIBUTING.md`, `CONTRIBUTORS.md`, `README.md` | Repository-level guides | Exist |
 | `pyproject.toml`, `requirements-dev.txt`, `.python-version` | Python tool configuration and the 3.12 pin | Exists (M1) |
 | `src/lambda_function.py` | Lambda entry point (`lambda_function.lambda_handler`) | Exists (M2) |
-| `src/mergeguard/` | Application modules ([ARCHITECTURE.md](docs/ARCHITECTURE.md) §4.2) | M2 modules exist; `ai_reviewer` and `prompts` Planned (M3) |
-| `tests/` | Unit, contract, integration tests, fixtures, AI evaluation set; shared fakes in `tests/support.py` | Exists (M2); AI evaluation Planned (M3) |
+| `src/mergeguard/` | Application modules ([ARCHITECTURE.md](docs/ARCHITECTURE.md) §4.2) | Exists (M2–M3) |
+| `tests/` | Unit, contract, integration tests, fixtures, AI evaluation set; shared fakes in `tests/support.py` | Exists (M2–M3); AI evaluation blocked (T-304, OQ-05) |
 | `terraform/` | All AWS infrastructure | Skeleton exists (M1); resources Planned (T-401) |
 | `.github/workflows/` | CI (and later deploy) workflows | `ci.yml` exists (M1); deploy Planned |
 

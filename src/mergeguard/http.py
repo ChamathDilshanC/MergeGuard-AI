@@ -4,7 +4,7 @@ explicit timeout (AGENTS.md section 5)."""
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -16,7 +16,12 @@ class HttpResponse:
 
 
 class TransportError(Exception):
-    """No HTTP response was received (DNS, TLS, connection or timeout failure)."""
+    """No HTTP response was received. ``kind`` is ``"timeout"`` or ``"network"``
+    (DNS, TLS or connection failure)."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
 
 
 class Transport(Protocol):
@@ -49,8 +54,15 @@ def urllib_transport(
         headers_items = exc.headers.items() if exc.headers is not None else []
         return HttpResponse(exc.code, _lower(headers_items), exc.read())
     except OSError as exc:
-        # Only the exception type: messages can contain hostnames or URLs.
-        raise TransportError(type(exc).__name__) from exc
+        # Only a category: messages can contain hostnames or URLs.
+        raise TransportError("timeout" if _is_timeout(exc) else "network") from exc
+
+
+def _is_timeout(exc: OSError) -> bool:
+    # urlopen raises TimeoutError on read timeouts but wraps connect timeouts.
+    return isinstance(exc, TimeoutError) or (
+        isinstance(exc, URLError) and isinstance(exc.reason, TimeoutError)
+    )
 
 
 def _lower(items: Iterable[tuple[str, str]]) -> dict[str, str]:

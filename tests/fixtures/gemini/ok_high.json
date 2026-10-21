@@ -1,0 +1,17 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "text": "{\"risk_level\": \"HIGH\", \"bugs_found\": 2, \"summary\": \"User input reaches a SQL query.\", \"feedback_markdown\": \"- `src/db.py`: the query concatenates `user_id`; use a parameterised query.\\n- `src/db.py`: the cursor is never closed; use a context manager.\"}"
+          }
+        ]
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "modelVersion": "gemini-2.5-flash"
+}

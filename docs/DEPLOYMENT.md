@@ -156,7 +156,7 @@ aws logs tail /aws/lambda/mergeguard-ai-pr-reviewer --follow --region us-east-1
 | No review; logs show `github.auth_failed` | Token expired or revoked | Rotate the token ([SECURITY.md](SECURITY.md) §6) |
 | No review; logs show `github.forbidden` | Repository not selected in the token, or permission missing | Edit the token's repository access and permissions |
 | Review posted as comment with "changes are requested" note | PR author owns the token (EC-08) | Expected; use a dedicated bot account or the Phase 3 GitHub App |
-| Reviews say "AI review unavailable" | Gemini quota, invalid model ID, or key problem | Check `ai.failed` `reason` in logs; verify the model ID and the key |
+| Reviews say "AI review unavailable" | Gemini quota, invalid model ID, or key problem | Check `ai.failed` `reason` in logs: `not_configured` means the Gemini key is missing in SSM; `bad_request` usually means an invalid model ID; `auth` means the key was rejected; `rate_limited` means quota |
 | Duplicate reviews | Marker or `commit_id` mismatch (FR-014 bug) | Capture delivery IDs; add a regression test |
 | Webhook not delivering at all | Webhook inactive, wrong events, or wrong URL | Check *Recent Deliveries*; redeliver `ping` |
 

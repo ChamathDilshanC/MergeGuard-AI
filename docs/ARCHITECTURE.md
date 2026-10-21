@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — M1 foundation and M2 webhook pipeline (no AI) implemented; **not deployed** |
+| Status | Draft v0.1 — M1 to M3 implemented (pipeline with Gemini review, mocked in tests); **not deployed** |
 | Last updated | 2026-10-21 |
 | Owner | [@ChamathDilshanC](https://github.com/ChamathDilshanC) |
 | Related | [PRD](PRD.md) · [API spec](API_SPEC.md) · [Security](SECURITY.md) · [Deployment](DEPLOYMENT.md) · [ADRs](ADR/README.md) |
@@ -15,7 +15,8 @@ This document describes how MergeGuard AI is built. It covers the **Phase 1 (MVP
 
 - **M1** added the project skeleton, dev tooling, a Terraform skeleton without resources, and a CI workflow (§4.1).
 - **M2** added the webhook pipeline without AI: signature check, event triage, secret scan, decision policy, review posting with the own-PR fallback, duplicate prevention, dry run and structured logging. It is covered by unit, contract and integration tests.
-- **Not yet built:** the AI review (M3) and Terraform resources (T-401). Nothing is deployed. Component names below come from the brief (Planned) or are recommendations (Proposed).
+- **M3** added the Gemini review after a clean scan: the versioned prompt, diff budget, strict output validation, prompt-injection defences and fail-safe fallbacks. It is tested with mocked Gemini responses only.
+- **Not yet built:** Terraform resources (T-401) and the AI evaluation (T-304, blocked on OQ-05). Nothing is deployed. Component names below come from the brief (Planned) or are recommendations (Proposed).
 
 ## 2. System context
 
@@ -68,14 +69,14 @@ flowchart LR
 ├── docs/                      # This documentation suite
 ├── src/
 │   ├── lambda_function.py     # Lambda entry point (M2)
-│   └── mergeguard/            # M2 modules; AI modules arrive in M3
+│   └── mergeguard/            # Phase 1 modules (M2-M3), incl. ai_reviewer and prompts
 ├── terraform/
 │   ├── .terraform.lock.hcl
 │   ├── providers.tf
 │   ├── variables.tf           # Variables from DEPLOYMENT.md section 4; no resources yet
 │   └── versions.tf
 └── tests/
-    ├── fixtures/webhooks/     # Sanitised webhook payloads
+    ├── fixtures/              # Sanitised webhook payloads and recorded Gemini responses
     ├── integration/           # Handler end to end with fake GitHub and SSM
     ├── support.py             # Shared fakes and fake-secret helpers
     └── unit/                  # Module tests; scanner corpus and self-scan in unit/scanner/
@@ -126,7 +127,7 @@ Terraform packages the code with `archive_file` using `source_dir = "../src"` in
 | `config` | Reads `MERGEGUARD_*` environment variables; loads the three SSM parameters with one `GetParameters` call; caches with a TTL | Never logs values |
 | `github_client` | `GET .../pulls/{n}/files` with pagination; `GET`/`POST .../pulls/{n}/reviews` | `X-GitHub-Api-Version` header; timeouts; maps `401`/`403`/`404`/`422`/`429` to typed errors |
 | `scanner` | Applies secret rules to added lines and returns findings (rule, file, line, masked hint) | Pure function; versioned rule set |
-| `ai_reviewer` | Builds the prompt, calls Gemini with the key in a header, validates the JSON | Untrusted-input prompting; bounded timeout; no tools or function calling |
+| `ai_reviewer` | Builds the size-limited diff bundle and the prompt, calls Gemini with the key in a header, validates the JSON | Untrusted-input prompting with random boundaries; deadline-based timeout; no tools; key read from SSM only for this call; every failure becomes a T-AIU reason |
 | `policy` | Maps scan findings and the AI result to a review event | Pure function; never `APPROVE` |
 | `render` | Produces the review Markdown from templates; sanitises model text; enforces length caps | Hidden marker `<!-- mergeguard:v1 ... -->` |
 | `logging_util` | Emits one JSON object per line | Allow-listed fields only |
@@ -182,7 +183,7 @@ MergeGuard is **stateless and has no database by design**. GitHub stores PRs and
 | `Triage` (`webhook.py`) | `status`, `reason`, `action`, `pull_request` | Result of triaging an authenticated delivery |
 | `PullRequestRef` | `repo` (`owner/name`), `number`, `head_sha`, `author_login`, `draft` | From `pull_request` payload; validated (repository name, 40/64-hex SHA) |
 | `ChangedFile` | `filename`, `status`, `patch` (optional) | From the PR files API |
-| `DiffBundle` | `files`, `text`, `truncated`, `omitted_files` | M3; built under `MERGEGUARD_MAX_DIFF_CHARS` |
+| `DiffBundle` | `text`, `included_files`, `omitted_files`, `truncated`, `max_chars` | Built under `MERGEGUARD_MAX_DIFF_CHARS` (M3) |
 | `SecretFinding` | `rule_id`, `filename`, `line` | Holds no part of the matched value (no masked hint either) |
 | `AIReview` | `risk_level`, `bugs_found`, `summary`, `feedback_markdown`, `model` | Validated output |
 | `Decision` (`policy.py`) | `event`, `template`, `reason` | Output of `policy`; `render` turns it into the review body |
@@ -213,15 +214,15 @@ Details and the threat model are in [SECURITY.md](SECURITY.md).
 
 | Kind | Name | Default | Source | Status |
 | --- | --- | --- | --- | --- |
-| Secret | `<prefix>/github_token` | — | SSM `SecureString` | Planned (brief) |
-| Secret | `<prefix>/webhook_secret` | — | SSM `SecureString` | Planned (brief) |
-| Secret | `<prefix>/gemini_api_key` | — | SSM `SecureString` | Planned (brief) |
-| Env var | `MERGEGUARD_PARAM_PREFIX` | `/mergeguard` | Terraform | Proposed |
-| Env var | `MERGEGUARD_GEMINI_MODEL` | `gemini-2.5-flash` | Terraform | Proposed |
-| Env var | `MERGEGUARD_MAX_DIFF_CHARS` | `12000` | Terraform | Proposed (value from brief) |
-| Env var | `MERGEGUARD_MAX_FILES` | `300` | Terraform | Proposed |
-| Env var | `MERGEGUARD_LOG_LEVEL` | `INFO` | Terraform | Proposed |
-| Env var | `MERGEGUARD_DRY_RUN` | `false` | Terraform | Proposed |
+| Secret | `<prefix>/github_token` | — | SSM `SecureString` | Read by code (M2) |
+| Secret | `<prefix>/webhook_secret` | — | SSM `SecureString` | Read by code (M2) |
+| Secret | `<prefix>/gemini_api_key` | — | SSM `SecureString`, separate call, only for AI reviews | Read by code (M3) |
+| Env var | `MERGEGUARD_PARAM_PREFIX` | `/mergeguard` | Terraform | Read by code (M2); Terraform wiring T-401 |
+| Env var | `MERGEGUARD_GEMINI_MODEL` | `gemini-2.5-flash` | Terraform | Read by code (M3); Terraform wiring T-401 |
+| Env var | `MERGEGUARD_MAX_DIFF_CHARS` | `12000` (1 to 200,000) | Terraform | Read by code (M3); Terraform wiring T-401 |
+| Env var | `MERGEGUARD_MAX_FILES` | `300` | Terraform | Read by code (M2); Terraform wiring T-401 |
+| Env var | `MERGEGUARD_LOG_LEVEL` | `INFO` | Terraform | Read by code (M2); Terraform wiring T-401 |
+| Env var | `MERGEGUARD_DRY_RUN` | `false` | Terraform | Read by code (M2); Terraform wiring T-401 |
 | Terraform var | `aws_region` | `us-east-1` | `terraform.tfvars` | Proposed (value from brief) |
 
 Environment variables hold **non-secret** settings only. Terraform variables are listed in [DEPLOYMENT.md](DEPLOYMENT.md) §4.
@@ -236,7 +237,7 @@ Environment variables hold **non-secret** settings only. Terraform variables are
 | GitHub `401`/`403` (auth or permissions) | Log `github.auth_failed`, no retry | `500` |
 | GitHub `422` on `REQUEST_CHANGES` for own PR | Retry once as `COMMENT` (FR-010) | `200` |
 | GitHub `429`, `5xx` or no response | One retry after 1 s if time allows, then fail. POSTs are retried only on rate limits: a POST that got a `5xx` may already have created the review | `500` |
-| Gemini timeout, `429`, `5xx`, safety block, invalid JSON | AI-unavailable `COMMENT` (FR-008) | `200` |
+| Gemini timeout, `429`, `5xx`, safety block, invalid JSON, missing key, oversized diff | AI-unavailable `COMMENT` (FR-008); never `REQUEST_CHANGES` | `200` |
 | Unexpected exception | Log type and delivery ID (no payload) | `500` |
 
 **Retries:** GitHub does **not** redeliver failed webhooks automatically. Operators redeliver from *Settings → Webhooks → Recent Deliveries*. Returning `500` for retryable failures makes them visible there.

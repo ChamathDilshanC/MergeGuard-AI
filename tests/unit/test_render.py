@@ -155,7 +155,9 @@ def test_render_review_dispatches_on_template():
     unavailable = Decision(ReviewEvent.COMMENT, Template.AI_UNAVAILABLE, "timeout")
     assert render_review(unavailable, short_sha=SHA) == T_AIU
     with pytest.raises(ValueError):
-        render_review(Decision(None, None, "ai_not_enabled"), short_sha=SHA)
+        render_review(Decision(None, None, "no_patches"), short_sha=SHA)
+    with pytest.raises(ValueError):  # T-AI without a review to render
+        render_review(ai, short_sha=SHA)
 
 
 # --- ST-07: sanitisation of model output -----------------------------------
