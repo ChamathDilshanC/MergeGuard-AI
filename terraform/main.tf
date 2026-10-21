@@ -28,7 +28,7 @@ locals {
   queue_visibility_timeout = max(30, var.worker_timeout_seconds * 6)
 
   # The parameters the Lambda reads (docs/API_SPEC.md section 5).
-  secret_names = toset(["github_token", "webhook_secret", "gemini_api_key"])
+  secret_names = toset(["github_token", "webhook_secret", "gemini_api_key", "github_app_private_key"])
 
   # Public, non-secret value Terraform writes once (ADR-0007). The Lambda treats
   # any value with this prefix as "not set" (config.PLACEHOLDER_PREFIX).
@@ -132,11 +132,12 @@ resource "aws_iam_role_policy" "worker" {
         Resource = "arn:aws:logs:${local.region}:${local.account_id}:log-group:${local.worker_log_group}:*"
       },
       {
-        Sid    = "ReadGitHubTokenAndGeminiKey"
+        Sid    = "ReadGitHubCredentialAndGeminiKey"
         Effect = "Allow"
         Action = ["ssm:GetParameter", "ssm:GetParameters"]
         Resource = [
           "arn:aws:ssm:${local.region}:${local.account_id}:parameter${var.param_prefix}/github_token",
+          "arn:aws:ssm:${local.region}:${local.account_id}:parameter${var.param_prefix}/github_app_private_key",
           "arn:aws:ssm:${local.region}:${local.account_id}:parameter${var.param_prefix}/gemini_api_key",
         ]
       },
@@ -281,6 +282,13 @@ resource "aws_lambda_function" "worker" {
       MERGEGUARD_DRY_RUN          = tostring(var.dry_run)
       MERGEGUARD_COMMIT_STATUS    = tostring(var.commit_status_enabled)
       MERGEGUARD_SCAN_ALLOW_PATHS = join(",", var.scan_allow_paths)
+
+      # Phase 3: GitHub App mode (empty keeps the personal access token),
+      # inline comments, and per-repository configuration.
+      MERGEGUARD_GITHUB_APP_ID            = var.github_app_id == null ? "" : var.github_app_id
+      MERGEGUARD_INLINE_COMMENTS          = var.inline_comments
+      MERGEGUARD_REPO_CONFIG              = tostring(var.repo_config_enabled)
+      MERGEGUARD_REPO_CONFIG_BLOCK_LEVELS = join(",", var.repo_config_block_levels)
     }
   }
 

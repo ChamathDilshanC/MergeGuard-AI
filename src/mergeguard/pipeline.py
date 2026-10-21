@@ -20,11 +20,23 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from mergeguard.ai_reviewer import AIOutcome
-from mergeguard.github_client import GitHubClient, GitHubError
+from mergeguard.config import DEFAULT_REPO_CONFIG_BLOCK_LEVELS
+from mergeguard.github_client import (
+    FileTooLarge,
+    GitHubClient,
+    GitHubError,
+    PullState,
+)
+from mergeguard.inline import InlineComment, ai_comments, secret_comments
 from mergeguard.logging_util import JsonLogger
 from mergeguard.models import AIReview, ChangedFile, PullRequestRef
-from mergeguard.policy import Decision, ReviewEvent, Template, decide
-from mergeguard.prompts import PROMPT_VERSION
+from mergeguard.policy import (
+    Decision,
+    ReviewEvent,
+    Template,
+    comment_only_levels,
+    decide,
+)
 from mergeguard.render import (
     FALLBACK_CALLOUT,
     MARKER_PREFIX,
@@ -37,16 +49,33 @@ from mergeguard.render import (
     dismissal_message,
     render_review,
 )
-from mergeguard.scanner import scan, withhold_suppressed
+from mergeguard.repo_config import (
+    CONFIG_PATH,
+    MAX_CONFIG_BYTES,
+    ConfigOutcome,
+    RepoConfig,
+    parse_repo_config,
+)
+from mergeguard.scanner import (
+    compile_allow_path,
+    scan,
+    visible_lines,
+    withhold_suppressed,
+)
 
 # GitHub conditions that a retry can fix; everything else is permanent.
 TRANSIENT_KINDS = frozenset({"rate_limited", "unavailable"})
+
+# Why the AI was not asked although the scan was clean: the repository's choice
+# (FR-022). Nothing blocks, so the status is clear and stale blocks are dismissed.
+AI_SKIP_REASONS = frozenset({"ai_disabled", "all_paths_ignored"})
 
 _KIND_RE = re.compile(re.escape(MARKER_PREFIX) + r"kind=([a-z-]+) ")
 
 
 class AIReviewer(Protocol):
     model: str
+    prompt_version: str
 
     def review(self, files: Sequence[ChangedFile]) -> AIOutcome: ...
 
@@ -91,6 +120,9 @@ class ReviewPipeline:
         commit_status: bool = False,
         allow_paths: Sequence[str] = (),
         verify_head: bool = False,
+        inline_comments: str = "off",
+        use_repo_config: bool = False,
+        block_levels: Sequence[str] = DEFAULT_REPO_CONFIG_BLOCK_LEVELS,
     ) -> None:
         self._github = github
         self._reviewer = reviewer
@@ -102,10 +134,15 @@ class ReviewPipeline:
         # The worker runs minutes after the webhook, so it re-checks the head
         # (PRD EC-07); the synchronous path acts on the delivery it just got.
         self._verify_head = verify_head
+        self._inline_mode = inline_comments  # the operator's mode (FR-021)
+        self._use_repo_config = use_repo_config  # FR-022
+        self._block_levels = tuple(block_levels)
         self._reviews: list[Any] | None = None
+        self._pull: PullState | None = None
 
     def run(self, pr: PullRequestRef) -> Outcome:
         self._reviews = None
+        self._pull = None
         try:
             return self._run(pr)
         except Exception:
@@ -134,6 +171,23 @@ class ReviewPipeline:
                 return Outcome(200, "duplicate")
             self._set_status(pr, STATUS_PENDING)
 
+        loaded = self._repo_config(pr) if reviewable else ConfigOutcome(RepoConfig())
+        config = loaded.config
+        inline_mode = config.inline_comments or self._inline_mode
+        # ignore_paths and ai_review only decide what the AI sees. The scan below
+        # always covers every file, and the repository cannot suppress anything.
+        ignored = [compile_allow_path(item) for item in config.ignore_paths]
+        ai_candidates = [
+            changed
+            for changed in reviewable
+            if not any(pattern.fullmatch(changed.filename) for pattern in ignored)
+        ]
+        ai_skip = None
+        if not config.ai_review:
+            ai_skip = "ai_disabled"
+        elif reviewable and not ai_candidates:
+            ai_skip = "all_paths_ignored"
+
         result = scan(reviewable, self._allow_paths)
         findings = result.findings
         rule_ids = sorted({finding.rule_id for finding in findings})
@@ -141,17 +195,23 @@ class ReviewPipeline:
             "scan.completed", rule_ids=rule_ids, suppressed=len(result.suppressed)
         )
         ai = None
-        if reviewable and not findings:  # never send a diff with secrets (ADR-0004)
-            ai = self._ai_review(withhold_suppressed(reviewable, result.suppressed))
+        if reviewable and not findings and ai_skip is None:
+            # never send a diff with secrets (ADR-0004)
+            ai = self._ai_review(withhold_suppressed(ai_candidates, result.suppressed))
         decision = decide(
             findings,
             ai.review if ai else None,
             ai_failure=ai.failure if ai else None,
             has_patches=bool(reviewable),
+            comment_only=comment_only_levels(config.block_on),
+            ai_skip_reason=ai_skip,
         )
         if decision.event is None:
             self._log.log("review.skipped", reason=decision.reason)
-            self._set_status(pr, STATUS_CLEAR)
+            if decision.reason in AI_SKIP_REASONS:
+                self._settle(pr, Verdict.CLEAR)
+            else:
+                self._set_status(pr, STATUS_CLEAR)
             return Outcome(200, "skipped", decision.reason)
 
         partial_ai = ai is not None and ai.review is not None and ai.bundle.truncated
@@ -161,8 +221,13 @@ class ReviewPipeline:
             files_cap=self._max_files if capped else None,
             no_patch_files=tuple(f.filename for f in files if not f.patch),
             suppressed=tuple(result.suppressed),
+            config_applied=loaded.config.applied,
+            config_invalid=loaded.invalid,
         )
         review: AIReview | None = ai.review if ai else None
+        comments = self._inline_comments(
+            inline_mode, findings, ai, ai_candidates, result.suppressed
+        )
 
         def render(fallback: bool) -> str:
             return render_review(
@@ -185,14 +250,70 @@ class ReviewPipeline:
         stale = self._stale_reason(pr)  # the AI call can take a while
         if stale:
             return self._stale(stale)
-        posted = self._post(pr, decision.event, render)
+        posted = self._post(pr, decision.event, render, comments)
         self._settle(pr, _verdict_for(decision))
         return Outcome(200, "reviewed", posted)
+
+    def _repo_config(self, pr: PullRequestRef) -> ConfigOutcome:
+        """Read ``.github/mergeguard.json`` from the pull request's BASE commit,
+        never its head, so a PR cannot change the rules that apply to it
+        (ADR-0011). A repository without the file, or a token that cannot read it,
+        simply gets the defaults."""
+        if not self._use_repo_config:
+            return ConfigOutcome(RepoConfig())
+        if self._pull is None:  # inline mode has not looked at the pull request yet
+            self._pull = self._github.pull_state(pr.repo, pr.number)
+        base = self._pull.base_sha
+        try:
+            raw = (
+                self._github.get_file(pr.repo, CONFIG_PATH, base, MAX_CONFIG_BYTES)
+                if base
+                else None
+            )
+        except FileTooLarge:
+            raw = b" " * (MAX_CONFIG_BYTES + 1)  # reported as too_large below
+        if raw is None:
+            return ConfigOutcome(RepoConfig())
+        outcome = parse_repo_config(
+            raw, block_levels=self._block_levels, inline_mode=self._inline_mode
+        )
+        if outcome.invalid:
+            self._log.log("repo_config.invalid", "WARNING", reason=outcome.invalid)
+        elif outcome.config.applied:
+            self._log.log(
+                "repo_config.applied", config_keys=len(outcome.config.applied)
+            )
+        return outcome
+
+    def _inline_comments(
+        self,
+        mode: str,
+        findings: Sequence[Any],
+        ai: AIOutcome | None,
+        ai_candidates: Sequence[ChangedFile],
+        suppressed: Sequence[Any],
+    ) -> list[InlineComment]:
+        """Inline comments for this review (FR-021): secret findings in the
+        modes ``secrets`` and ``all``, AI findings in ``all``. AI findings are
+        anchored only to lines of the diff that was actually sent to the model."""
+        if mode == "off":
+            return []
+        comments = secret_comments(findings)
+        if mode == "all" and ai is not None and ai.review is not None:
+            sent = set(ai.bundle.included_files)
+            visible = {
+                changed.filename: visible_lines(changed.patch)
+                for changed in withhold_suppressed(ai_candidates, suppressed)
+                if changed.patch and changed.filename in sent
+            }
+            comments += ai_comments(ai.review.findings, visible)
+        return comments
 
     def _stale_reason(self, pr: PullRequestRef) -> str | None:
         if not self._verify_head:
             return None
         current = self._github.pull_state(pr.repo, pr.number)
+        self._pull = current
         if current.state != "open":
             return "pr_closed"
         if current.head_sha != pr.head_sha:
@@ -207,7 +328,7 @@ class ReviewPipeline:
         ai = self._reviewer.review(files)
         common = {
             "model": self._reviewer.model,
-            "prompt_version": PROMPT_VERSION,
+            "prompt_version": self._reviewer.prompt_version,
             "duration_ms": ai.duration_ms,
         }
         if ai.review is not None:
@@ -305,27 +426,67 @@ class ReviewPipeline:
         return True
 
     def _post(
-        self, pr: PullRequestRef, event: ReviewEvent, render: Callable[[bool], str]
+        self,
+        pr: PullRequestRef,
+        event: ReviewEvent,
+        render: Callable[[bool], str],
+        comments: Sequence[InlineComment] = (),
     ) -> ReviewEvent:
-        try:
-            self._create(pr, event, render(False))
-            posted = event
-        except GitHubError as exc:
-            # GitHub answers 422 when the token owner authored the PR (FR-010).
-            own_pr_refusal = (
-                exc.kind == "invalid_request" and event is ReviewEvent.REQUEST_CHANGES
-            )
-            if not own_pr_refusal:
-                raise
-            self._log.log("review.fallback_comment", http_status=exc.status)
-            self._create(pr, ReviewEvent.COMMENT, render(True))
-            posted = ReviewEvent.COMMENT
-        self._log.log("review.posted", decision=posted)
-        return posted
+        """Post the review, trying the next variant when GitHub answers ``422``.
 
-    def _create(self, pr: PullRequestRef, event: ReviewEvent, body: str) -> None:
+        A ``422`` means nothing was created, so a retry cannot duplicate. The order
+        keeps the verdict above the decoration: first without the inline comments
+        (they are the likelier cause), and only then the own-PR fallback to a plain
+        comment (FR-010), which again tries the comments first."""
+        api = [comment.as_api() for comment in comments]
+        attempts: list[tuple[ReviewEvent, bool, list[dict[str, object]]]] = [
+            (event, False, api)
+        ]
+        if api:
+            attempts.append((event, False, []))
+        if event is ReviewEvent.REQUEST_CHANGES:
+            attempts.append((ReviewEvent.COMMENT, True, api))
+            if api:
+                attempts.append((ReviewEvent.COMMENT, True, []))
+        *earlier, final = attempts
+        for index, attempt in enumerate(earlier):
+            try:
+                return self._attempt(pr, attempt, render)
+            except GitHubError as exc:
+                if exc.kind != "invalid_request":
+                    raise
+                following = attempts[index + 1]
+                if following[1] and not attempt[1]:
+                    self._log.log("review.fallback_comment", http_status=exc.status)
+                elif attempt[2] and not following[2]:
+                    self._log.log("review.inline_dropped", http_status=exc.status)
+        return self._attempt(pr, final, render)
+
+    def _attempt(
+        self,
+        pr: PullRequestRef,
+        attempt: tuple[ReviewEvent, bool, list[dict[str, object]]],
+        render: Callable[[bool], str],
+    ) -> ReviewEvent:
+        event, fallback, attached = attempt
+        self._create(pr, event, render(fallback), attached)
+        self._log.log("review.posted", decision=event, inline_comments=len(attached))
+        return event
+
+    def _create(
+        self,
+        pr: PullRequestRef,
+        event: ReviewEvent,
+        body: str,
+        comments: Sequence[dict[str, object]] = (),
+    ) -> None:
         self._github.create_review(
-            pr.repo, pr.number, commit_id=pr.head_sha, event=event, body=body
+            pr.repo,
+            pr.number,
+            commit_id=pr.head_sha,
+            event=event,
+            body=body,
+            comments=comments,
         )
 
 

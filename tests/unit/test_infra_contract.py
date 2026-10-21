@@ -47,13 +47,23 @@ def test_lambda_environments_cover_exactly_the_settings_the_code_reads():
     # Each function gets what it uses, so no setting is dead weight.
     assert "MERGEGUARD_QUEUE_URL" in receiver - worker
     assert {"MERGEGUARD_COMMIT_STATUS", "MERGEGUARD_SCAN_ALLOW_PATHS"} <= worker
+    assert {
+        "MERGEGUARD_GITHUB_APP_ID",
+        "MERGEGUARD_INLINE_COMMENTS",
+        "MERGEGUARD_REPO_CONFIG",
+        "MERGEGUARD_REPO_CONFIG_BLOCK_LEVELS",
+    } <= worker - receiver
     assert "MERGEGUARD_QUEUE_URL" not in worker  # the worker never queues
 
 
 def test_terraform_creates_exactly_the_secrets_the_code_reads():
     names = re.search(r"secret_names = toset\(\[(.*?)\]\)", MAIN_TF).group(1)
     created = set(re.findall(r'"([a-z_]+)"', names))
-    assert created == {*config.CORE_SECRET_NAMES, config.GEMINI_KEY_NAME}
+    assert created == {
+        *config.CORE_SECRET_NAMES,
+        config.GEMINI_KEY_NAME,
+        config.GITHUB_APP_KEY_NAME,
+    }
 
 
 def test_each_function_may_read_only_the_secrets_it_uses():
@@ -66,7 +76,11 @@ def test_each_function_may_read_only_the_secrets_it_uses():
         return set(re.findall(r"parameter\$\{var\.param_prefix\}/([a-z_]+)", policy))
 
     assert parameters(receiver) == {config.WEBHOOK_SECRET_NAME}
-    assert parameters(worker) == {config.GITHUB_TOKEN_NAME, config.GEMINI_KEY_NAME}
+    assert parameters(worker) == {
+        config.GITHUB_TOKEN_NAME,
+        config.GITHUB_APP_KEY_NAME,
+        config.GEMINI_KEY_NAME,
+    }
     assert "/*" not in receiver.replace("log-group", "")  # no parameter wildcard
 
 

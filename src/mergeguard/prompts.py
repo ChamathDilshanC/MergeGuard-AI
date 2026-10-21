@@ -9,6 +9,10 @@ import re
 from typing import Any
 
 PROMPT_VERSION = "review-v1"
+# The prompt that also asks for per-line findings (FR-021). It is used only when
+# inline comments are set to "all". It has not been evaluated (T-304 is blocked on
+# OQ-05), which is why the default prompt is still review-v1.
+PROMPT_VERSION_FINDINGS = "review-v2"
 
 SYSTEM_INSTRUCTION = """\
 You are a senior DevSecOps code reviewer. You review a Git pull-request diff for
@@ -32,6 +36,16 @@ Rules:
 - If the diff is truncated, review only what is present.
 Respond only with JSON that matches the provided schema."""
 
+FINDINGS_INSTRUCTION = """\
+- findings: up to 10 of the most important problems that sit on one specific
+  line. Each has file (the path exactly as in the "### File:" line), line (the
+  line number in the NEW version of the file, counted from the hunk header) and
+  message (one or two sentences with a concrete fix). Cite only lines that
+  appear in the diff. Use an empty list if there is nothing line-specific.
+"""
+
+MAX_FINDINGS = 10
+
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "properties": {
@@ -43,6 +57,39 @@ RESPONSE_SCHEMA: dict[str, Any] = {
     "required": ["risk_level", "bugs_found", "summary", "feedback_markdown"],
     "propertyOrdering": ["risk_level", "bugs_found", "summary", "feedback_markdown"],
 }
+
+FINDINGS_SCHEMA: dict[str, Any] = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "file": {"type": "STRING"},
+            "line": {"type": "INTEGER"},
+            "message": {"type": "STRING"},
+        },
+        "required": ["file", "line", "message"],
+        "propertyOrdering": ["file", "line", "message"],
+    },
+}
+
+
+def system_instruction(findings: bool = False) -> str:
+    """``SYSTEM_INSTRUCTION`` (review-v1), plus the findings rule for review-v2."""
+    if not findings:
+        return SYSTEM_INSTRUCTION
+    head, tail = SYSTEM_INSTRUCTION.rsplit("Respond only with JSON", 1)
+    return head + FINDINGS_INSTRUCTION + "Respond only with JSON" + tail
+
+
+def response_schema(findings: bool = False) -> dict[str, Any]:
+    """``RESPONSE_SCHEMA``, with the optional ``findings`` array for review-v2."""
+    if not findings:
+        return RESPONSE_SCHEMA
+    schema = {**RESPONSE_SCHEMA, "properties": dict(RESPONSE_SCHEMA["properties"])}
+    schema["properties"]["findings"] = FINDINGS_SCHEMA
+    schema["propertyOrdering"] = [*RESPONSE_SCHEMA["propertyOrdering"], "findings"]
+    return schema
+
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]+")
 _BACKTICK_RUN_RE = re.compile(r"`+")

@@ -233,3 +233,44 @@ variable "monthly_budget_usd" {
     error_message = "monthly_budget_usd must be null or positive."
   }
 }
+
+# --- Phase 3 (M6) ------------------------------------------------------------------
+
+variable "github_app_id" {
+  description = "ID of the GitHub App that MergeGuard authenticates as (MERGEGUARD_GITHUB_APP_ID, FR-020). Null keeps the personal access token. The App's private key goes in the github_app_private_key SSM parameter (docs/DEPLOYMENT.md section 3.4); an App ID is not a secret."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.github_app_id == null ? true : can(regex("^[A-Za-z0-9._-]{1,40}$", var.github_app_id))
+    error_message = "github_app_id must be a GitHub App ID or client ID, or null."
+  }
+}
+
+variable "inline_comments" {
+  description = "Inline line-level review comments (MERGEGUARD_INLINE_COMMENTS, FR-021): off, secrets (secret findings only) or all (also AI findings). all uses the longer review-v2 prompt, which has not been evaluated (T-304, OQ-05), so the default stops at secrets."
+  type        = string
+  default     = "secrets"
+
+  validation {
+    condition     = contains(["off", "secrets", "all"], var.inline_comments)
+    error_message = "inline_comments must be off, secrets or all."
+  }
+}
+
+variable "repo_config_enabled" {
+  description = "Read .github/mergeguard.json from each pull request's base commit (MERGEGUARD_REPO_CONFIG, FR-022). Needs the Contents: read permission."
+  type        = bool
+  default     = true
+}
+
+variable "repo_config_block_levels" {
+  description = "The lowest AI risk levels at which a repository file may choose to request changes (MERGEGUARD_REPO_CONFIG_BLOCK_LEVELS). Use [\"MEDIUM\"] to forbid relaxing the default."
+  type        = list(string)
+  default     = ["MEDIUM", "HIGH"]
+
+  validation {
+    condition     = length(var.repo_config_block_levels) > 0 && alltrue([for level in var.repo_config_block_levels : contains(["LOW", "MEDIUM", "HIGH"], level)])
+    error_message = "repo_config_block_levels must be a non-empty list of LOW, MEDIUM or HIGH."
+  }
+}

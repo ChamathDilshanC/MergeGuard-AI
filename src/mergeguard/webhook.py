@@ -114,6 +114,7 @@ def parse_pull_request(payload: Mapping[str, Any]) -> PullRequestRef:
         head_sha=head_sha,
         author_login=login if isinstance(login, str) else "",
         draft=draft,
+        installation_id=_installation_id(payload),
     )
 
 
@@ -132,6 +133,17 @@ def is_valid_pull_number(value: object) -> bool:
 
 def is_valid_sha(value: object) -> bool:
     return isinstance(value, str) and _SHA_RE.fullmatch(value) is not None
+
+
+def _installation_id(payload: Mapping[str, Any]) -> int | None:
+    """``installation.id`` of an App webhook; absent for a plain repository
+    webhook. A present but unusable value is a malformed payload."""
+    if "installation" not in payload:
+        return None
+    installation_id = _object(payload["installation"]).get("id")
+    if not is_valid_pull_number(installation_id):
+        raise MalformedPayload("malformed_payload")
+    return installation_id
 
 
 def _parse_object(body: bytes) -> dict[str, Any]:

@@ -21,11 +21,18 @@ CORE_SECRET_NAMES = (GITHUB_TOKEN_NAME, WEBHOOK_SECRET_NAME)
 # Loaded only when an AI review is actually requested, so a missing Gemini key
 # degrades to the AI-unavailable comment instead of blocking the secret gate.
 GEMINI_KEY_NAME = "gemini_api_key"
+# Phase 3 (FR-020): the GitHub App's private key, read by the worker only when
+# MERGEGUARD_GITHUB_APP_ID is set. In App mode the personal access token is never
+# read.
+GITHUB_APP_KEY_NAME = "github_app_private_key"
 # Terraform creates each parameter with a public placeholder value (ADR-0007).
 # A value starting with this prefix counts as "not set": core secrets fail
 # closed, and a placeholder Gemini key means no diff is ever sent to Gemini.
 PLACEHOLDER_PREFIX = "mergeguard-placeholder"
 
+INLINE_COMMENT_MODES = ("off", "secrets", "all")
+RISK_LEVELS = ("LOW", "MEDIUM", "HIGH")
+DEFAULT_REPO_CONFIG_BLOCK_LEVELS = ("MEDIUM", "HIGH")
 MAX_ALLOW_PATHS = 50
 MAX_ALLOW_PATH_LENGTH = 200
 
@@ -38,6 +45,8 @@ _QUEUE_URL_RE = re.compile(
     r"https://sqs\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?/\d{12}/[A-Za-z0-9_-]{1,80}"
 )
 _ALLOW_PATH_RE = re.compile(r"[A-Za-z0-9_./*?@+=~ -]+")
+# A GitHub App ID (digits) or client ID (for example Iv1.abc); it is not a secret.
+_APP_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,40}")
 
 
 class ConfigError(Exception):
@@ -61,6 +70,16 @@ class Settings:
     commit_status: bool = False
     # FR-019. Operator-defined path globs whose findings are suppressed.
     scan_allow_paths: tuple[str, ...] = ()
+    # Phase 3. An App ID switches the worker from the personal access token to
+    # GitHub App installation tokens (FR-020).
+    github_app_id: str | None = None
+    # FR-021: "off", "secrets" (inline comments for secret findings only) or "all"
+    # (also for AI findings, which needs the longer review-v2 prompt).
+    inline_comments: str = "off"
+    # FR-022: read .github/mergeguard.json from the pull request's base commit.
+    repo_config: bool = False
+    # The blocking levels a repository file may choose (operator-defined bounds).
+    repo_config_block_levels: tuple[str, ...] = DEFAULT_REPO_CONFIG_BLOCK_LEVELS
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> "Settings":
@@ -90,6 +109,10 @@ class Settings:
             queue_url=_queue_url_setting(environ),
             commit_status=_bool_setting(environ, "MERGEGUARD_COMMIT_STATUS"),
             scan_allow_paths=_allow_paths_setting(environ),
+            github_app_id=_app_id_setting(environ),
+            inline_comments=_inline_comments_setting(environ),
+            repo_config=_bool_setting(environ, "MERGEGUARD_REPO_CONFIG"),
+            repo_config_block_levels=_block_levels_setting(environ),
         )
 
 
@@ -144,6 +167,10 @@ class SecretStore:
     def github_token(self) -> str:
         """Only the GitHub token: what the worker needs besides the Gemini key."""
         return self._values((GITHUB_TOKEN_NAME,))[GITHUB_TOKEN_NAME]
+
+    def github_app_private_key(self) -> str:
+        """The GitHub App's private key (PEM), read only in App mode."""
+        return self._values((GITHUB_APP_KEY_NAME,))[GITHUB_APP_KEY_NAME]
 
     def gemini_api_key(self) -> str:
         """The Gemini key, read only when an AI review is requested (M3)."""
@@ -225,20 +252,55 @@ def _allow_paths_setting(environ: Mapping[str, str]) -> tuple[str, ...]:
             f"MERGEGUARD_SCAN_ALLOW_PATHS allows at most {MAX_ALLOW_PATHS} patterns"
         )
     for pattern in patterns:
-        valid = (
-            len(pattern) <= MAX_ALLOW_PATH_LENGTH
-            and _ALLOW_PATH_RE.fullmatch(pattern) is not None
-            and not pattern.startswith("/")
-            and ".." not in pattern
-            # A pattern of only wildcards would switch the gate off.
-            and pattern.strip("*?/")
-        )
-        if not valid:
+        if not is_valid_path_pattern(pattern):
             raise ConfigError(
                 "MERGEGUARD_SCAN_ALLOW_PATHS has an invalid pattern; use relative "
                 "path globs such as tests/fixtures/**"
             )
     return patterns
+
+
+def is_valid_path_pattern(pattern: str) -> bool:
+    """A relative path glob that names something: no absolute path, no ``..``,
+    and not only wildcards (which would match everything). Shared by the operator
+    allow-list and the repository configuration."""
+    return bool(
+        len(pattern) <= MAX_ALLOW_PATH_LENGTH
+        and _ALLOW_PATH_RE.fullmatch(pattern) is not None
+        and not pattern.startswith("/")
+        and ".." not in pattern
+        and pattern.strip("*?/")
+    )
+
+
+def _app_id_setting(environ: Mapping[str, str]) -> str | None:
+    raw = environ.get("MERGEGUARD_GITHUB_APP_ID", "").strip()
+    if not raw:
+        return None
+    if not _APP_ID_RE.fullmatch(raw):
+        raise ConfigError("MERGEGUARD_GITHUB_APP_ID must be a GitHub App ID")
+    return raw
+
+
+def _inline_comments_setting(environ: Mapping[str, str]) -> str:
+    mode = environ.get("MERGEGUARD_INLINE_COMMENTS", "off").strip().lower()
+    if mode not in INLINE_COMMENT_MODES:
+        raise ConfigError(
+            f"MERGEGUARD_INLINE_COMMENTS must be one of {INLINE_COMMENT_MODES}"
+        )
+    return mode
+
+
+def _block_levels_setting(environ: Mapping[str, str]) -> tuple[str, ...]:
+    raw = environ.get("MERGEGUARD_REPO_CONFIG_BLOCK_LEVELS")
+    if raw is None or not raw.strip():
+        return DEFAULT_REPO_CONFIG_BLOCK_LEVELS
+    levels = tuple(item.strip().upper() for item in raw.split(",") if item.strip())
+    if not levels or any(level not in RISK_LEVELS for level in levels):
+        raise ConfigError(
+            f"MERGEGUARD_REPO_CONFIG_BLOCK_LEVELS must list levels from {RISK_LEVELS}"
+        )
+    return tuple(dict.fromkeys(levels))  # no duplicates, order kept
 
 
 def _bool_setting(environ: Mapping[str, str], name: str) -> bool:

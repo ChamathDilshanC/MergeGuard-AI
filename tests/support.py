@@ -215,9 +215,18 @@ def fixture_response(relative: str, status: int = 200) -> HttpResponse:
     return HttpResponse(status, {}, (FIXTURES / relative).read_bytes())
 
 
-def pull_state(head_sha: str = HEAD_SHA, state: str = "open") -> HttpResponse:
-    """Response of ``GET /pulls/{n}``: what the worker re-checks."""
-    return json_response(200, {"state": state, "head": {"sha": head_sha}})
+BASE_SHA = "b" * 40
+
+
+def pull_state(
+    head_sha: str = HEAD_SHA, state: str = "open", base_sha: str | None = BASE_SHA
+) -> HttpResponse:
+    """Response of ``GET /pulls/{n}``: what the worker re-checks. The base commit
+    is where the repository configuration is read from (ADR-0011)."""
+    data: dict[str, Any] = {"state": state, "head": {"sha": head_sha}}
+    if base_sha is not None:
+        data["base"] = {"sha": base_sha}
+    return json_response(200, data)
 
 
 def github_api(
@@ -290,6 +299,7 @@ class Harness(_LogCapture):
         self.env = env or {}
         self.ssm = ssm or FakeSsm()
         self.sqs = sqs
+        self.app_cache: dict = {}  # installation tokens, shared across calls
         self.logs = io.StringIO()
 
     def __call__(self, event: dict, context=None) -> tuple[int, dict]:
@@ -305,6 +315,7 @@ class Harness(_LogCapture):
             transport=self.transport,
             queue=queue,
             stream=self.logs,
+            app_cache=self.app_cache,
         )
         assert response["headers"] == {"Content-Type": "application/json"}
         return response["statusCode"], json.loads(response["body"])
@@ -322,6 +333,7 @@ class WorkerHarness(_LogCapture):
         self.transport = transport
         self.env = env or {}
         self.ssm = ssm or FakeSsm()
+        self.app_cache: dict = {}  # installation tokens, shared across calls
         self.logs = io.StringIO()
 
     def __call__(self, *bodies: Any, context=None) -> dict:
@@ -339,4 +351,5 @@ class WorkerHarness(_LogCapture):
             secrets=lambda prefix: store,
             transport=self.transport,
             stream=self.logs,
+            app_cache=self.app_cache,
         )
