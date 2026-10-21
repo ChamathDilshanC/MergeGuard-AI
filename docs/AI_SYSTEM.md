@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — implemented in M3 (`prompts.py`, `ai_reviewer.py`) and tested with mocked responses only; **no real Gemini call has been made** (tier undecided, OQ-05) |
+| Status | Draft v0.1 — implemented in M3 (`prompts.py`, `ai_reviewer.py`) and tested with mocked responses only; **no real Gemini call has been made** (tier undecided, OQ-05). M6 adds an **opt-in, unevaluated** prompt `review-v2` for per-line findings (§4.1) |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) FR-007, FR-008 · [API spec](API_SPEC.md) §4 · [Security](SECURITY.md) TM-03, TM-04 |
 
@@ -95,6 +95,24 @@ The brief put instructions and diff in a single prompt string. M3 separates them
 - **File names:** control characters, including newlines, are replaced so a crafted file name cannot start a new prompt line.
 - **Code fence:** each file's fence is longer than any backtick run in its patch.
 
+### 4.1 Prompt `review-v2`: per-line findings (opt-in, FR-021)
+
+`review-v1` above is the evaluated default. With `MERGEGUARD_INLINE_COMMENTS=all` the worker sends `review-v2` instead: the same system instruction with one extra rule, and the response schema with an optional `findings` array.
+
+```text
+- findings: up to 10 of the most important problems that sit on one specific
+  line. Each has file (the path exactly as in the "### File:" line), line (the
+  line number in the NEW version of the file, counted from the hunk header) and
+  message (one or two sentences with a concrete fix). Cite only lines that
+  appear in the diff. Use an empty list if there is nothing line-specific.
+```
+
+- **Not evaluated.** The evaluation (T-304) is blocked on OQ-05, so neither the quality of the findings nor how often the model counts line numbers correctly is measured. That is why `all` is opt-in, why Terraform defaults to `secrets`, and why the default prompt is unchanged. Per [AGENTS.md](../AGENTS.md) §7, run the evaluation, record the metrics and review the line accuracy before turning `all` on for real repositories.
+- **Fail-soft.** `findings` is not required. A malformed item is dropped and never fails the review; the other fields are validated exactly as before. At most 10 items are kept.
+- **Anchoring is checked in code**, not trusted: a finding becomes an inline comment only if its file was sent in full and its line is an added or context line of that file's diff, excluding lines withheld under ADR-0008 (`inline.py`). Wrong lines are dropped, not guessed.
+- `PROMPT_VERSION` stays `review-v1`; `review-v2` is `PROMPT_VERSION_FINDINGS`. The version that was used is logged with every call.
+- Findings never change the policy: it is computed from `risk_level` and `bugs_found` only.
+
 ## 5. Output contract
 
 The model must return exactly this object. It is enforced with `responseMimeType: application/json` plus `responseSchema`, and validated again in code (FR-008).
@@ -121,6 +139,7 @@ The model must return exactly this object. It is enforced with `responseMimeType
 | `bugs_found` | Integer, 0–1000 | Invalid → `T-AIU` |
 | `summary` | String; truncated to 500 characters | Truncate |
 | `feedback_markdown` | String; sanitised and truncated to 20,000 characters ([DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) §5.7) | Truncate |
+| `findings` (`review-v2` only) | Optional array. Each item needs `file` (1 to 500 characters), integer `line` ≥ 1 and non-empty `message` (trimmed, at most 1,000 characters). At most 10 items | Drop the item, never the review |
 | Extra fields | Ignored | — |
 
 The brief defaulted a missing `risk_level` to `MEDIUM`, which would request changes on a malformed answer. The Proposed behaviour treats malformed output as *AI unavailable* instead (fail open, FR-008).

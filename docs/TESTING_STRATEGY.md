@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — unit, contract and integration tests for M1–M3 exist (Gemini mocked); Phase 2 (M5) adds queue, worker, commit status, dismissal and suppression tests with fake SQS and GitHub, plus workflow and bootstrap checks; AI evaluation (T-304, blocked on OQ-05) and E2E (needs a deployment, T-402) are not built yet |
+| Status | Draft v0.1 — unit, contract and integration tests for M1–M3 exist (Gemini mocked); Phase 2 (M5) adds queue, worker, commit status, dismissal and suppression tests, plus workflow and bootstrap checks; Phase 3 (M6) adds RS256 signing, GitHub App authentication, inline comment and repository configuration tests with fakes; AI evaluation (T-304, blocked on OQ-05) and E2E (needs a deployment, T-402) are not built yet |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) · [Architecture](ARCHITECTURE.md) §13 · [Security](SECURITY.md) §8 · [AI system](AI_SYSTEM.md) §9 |
 
@@ -92,6 +92,11 @@ The suite enforces **0%** flagged negatives, stricter than the SM-3 gate.
 | ST-12 | Dismissal safety: older blocking reviews by another user, without the marker, already dismissed, or on the current head | Only the bot's own older `CHANGES_REQUESTED` reviews carrying the marker are dismissed; after an AI failure only the secret blocks are |
 | ST-13 | Queue messages: malformed, wrong schema, bad repository, SHA or action, and a message with extra author or title fields | The receiver's message holds metadata only; the worker rejects every malformed message (it is retried, then dead-lettered) and makes no GitHub or Gemini call |
 | ST-14 | Receiver with only the webhook secret readable | Works; the receiver never asks SSM for the token or the Gemini key. The worker never asks for the webhook secret |
+| ST-15 | The RS256 signer: PKCS#1 and PKCS#8 keys, tampered messages, a wrong private exponent, a non-invertible blinding factor, malformed DER, encrypted or undersized keys | Valid signatures verify; every malformed key is refused without echoing it; a faulty key never releases a signature. A one-off cross-check with OpenSSL 3.5 (2048 and 3072 bits, both formats) accepted every signature and rejected a tampered message |
+| ST-16 | App tokens: one repository and minimal permissions per request; cached and renewed; separate per repository, installation and permission set; error mapping; a rotated key | Matches ADR-0010; no token, JWT or key in the logs; the personal access token is never read in App mode; `GET /user` is never called |
+| ST-17 | Repository configuration written into the pull request's **head** (hostile) while the base has none, or other content | Only the base commit is requested; the head's file has no effect; an invalid, unknown-key, out-of-bounds or oversized file is ignored with a notice and never fails the review; the file cannot disable the secret scan or add suppressions |
+| ST-18 | Inline comment anchoring: lines outside the diff, files not in the diff, files truncated out of the AI input, lines withheld under ADR-0008, malformed findings | No comment is anchored to any of them; secret comments never contain the value |
+| ST-19 | GitHub refuses the inline comments (`422`) | The review is posted again without them and keeps its verdict; the own-PR fallback still works afterwards, with the comments retried first |
 
 ## 7. End-to-end scenarios (manual, sandbox)
 
@@ -113,6 +118,9 @@ Run against a deployed stack and a **sandbox** repository that has the webhook c
 | E2E-11 | Flag a PR with a secret, then push a fix; with the token's *Commit statuses* permission | `mergeguard/review` goes `pending` then `failure`; after the fix it goes `pending` then `success`, and the earlier blocking review is dismissed with a message naming the new commit |
 | E2E-12 | Add `mergeguard:ignore-secret` to the fake key line from E2E-2 | `T-AI` or `T-AIU` review with the suppression listed; no `T-SEC` |
 | E2E-13 | `aws cloudwatch set-alarm-state --alarm-name mergeguard-review-dlq-not-empty --state-value ALARM --state-reason test`, and the same for the other alarms | The notification reaches `alert_email`. Then send a malformed message to the queue and check that it reaches the dead-letter queue after three receives and the real alarm fires |
+| E2E-14 | After setting `github_app_id` and installing the App on two repositories, open a PR on each | The reviews are authored by `<app-slug>[bot]`; each PR gets its own token request; a redelivery is a duplicate; the own-PR `422` no longer occurs |
+| E2E-15 | With `inline_comments = secrets`, push the fake key from E2E-2 | The security review carries an inline comment on the offending line and never shows the value. If GitHub refuses it, the review still appears (`review.inline_dropped`) |
+| E2E-16 | Commit `.github/mergeguard.json` with `block_on = HIGH` to the base branch, then open a PR with a MEDIUM-risk change; then change the file only in the PR branch | The base file is applied and listed in the review; the PR's own edit of the file has no effect until it is merged |
 
 Record the outcome (pass/fail, delivery IDs, date) in the release PR description.
 
@@ -141,6 +149,9 @@ Record the outcome (pass/fail, delivery IDs, date) in the release PR description
 | FR-017 | Status texts | `POST /statuses` body, no retry on 5xx | Every verdict, error status, missing permission, duplicate healing | E2E-11 |
 | FR-018 | — | `PUT …/dismissals` body | ST-12, failed and retried dismissal, dry run | E2E-11 |
 | FR-019 | Scanner suppressions, glob rules, withholding, notice snapshot, settings validation | — | ST-10, ST-11 | E2E-12 |
+| FR-020 | RS256 signer, token minting and caching, settings | Token request and `GET /app` | App-mode review, bot-login duplicate and dismissal checks, per-repository tokens, installation ID, ST-15, ST-16 | E2E-14 |
+| FR-021 | Inline module, line visibility, finding validation, prompts | Review `comments` body, `422` handling | Secret and AI comments, caps, modes, ST-18, ST-19 | E2E-15 |
+| FR-022 | Config parser and bounds | Contents call | Base-commit read, notices, thresholds, AI off, ignored paths, ST-17 | E2E-16 |
 
 ## 9. Quality gates (CI)
 

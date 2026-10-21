@@ -130,6 +130,17 @@
 
 | ID | Task | Requirements | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- |
-| T-601 | GitHub App authentication (new ADR for JWT signing) | FR-020, ADR-0006 | Reviews appear as `[bot]`; works on two or more repositories | Not started |
-| T-602 | Inline line-level comments | FR-021 | Comments anchored only to lines present in the diff | Not started |
-| T-603 | Per-repository JSON config | FR-022 | Bounds enforced; invalid config falls back to defaults with a notice | Not started |
+| T-601 | GitHub App authentication (new ADR for JWT signing) | FR-020, ADR-0006 | Reviews appear as `[bot]`; works on two or more repositories | In review (signing, token minting, caching, bot-login checks and two-repository tokens tested with fakes; signer cross-checked with OpenSSL; **never run against GitHub**, so `[bot]` authorship and the permission set are unconfirmed until T-402) |
+| T-602 | Inline line-level comments | FR-021 | Comments anchored only to lines present in the diff | In review (anchoring and `422` handling tested; secret comments on by default in Terraform; **AI inline comments are opt-in and their prompt `review-v2` is unevaluated**, T-304 blocked on OQ-05) |
+| T-603 | Per-repository JSON config | FR-022 | Bounds enforced; invalid config falls back to defaults with a notice | In review (bounds, fallbacks, notices and the base-commit rule tested; GitHub's contents API behaviour unconfirmed until T-403) |
+
+**M6 notes:**
+
+- **What is verified.** 791 unit and integration tests pass with fakes for GitHub, SSM and SQS and a mocked Gemini (no real call, OQ-05). `terraform test` covers the stack (16 plan runs, 27 resources with defaults) and the bootstrap stack (7 runs) with a mocked AWS provider. The RS256 signer was also checked against OpenSSL 3.5. 13 safety properties were mutation-checked (each mutation made exactly one test fail). Every Terraform file parses with checkov's own HCL parser; **checkov itself was not run locally** (the install failed on a throttled network), so CI is its first run on the M6 changes. No AWS or GitHub credentials were used and nothing was applied.
+- **What is not verified.** Anything that needs a real GitHub App or AWS: that GitHub accepts the signed JWT and the requested permission set, the `[bot]` identity, how GitHub treats inline comments on stale lines, the contents API, and everything listed for M5. E2E-14 to E2E-16 ([TESTING_STRATEGY.md](TESTING_STRATEGY.md)) cover them.
+- **JWT signing.** Pure-Python RS256 ([ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md)): blinded, verified before release, strict DER. It is custom cryptography without a third-party audit; a maintainer who prefers an audited library can supersede the ADR with a `cryptography` layer, at the cost of ADR-0002.
+- **Repository configuration** is read from the **base commit** ([ADR-0011](ADR/0011-repository-config-from-the-base-commit.md)) and can never disable the secret scan or add suppressions.
+- **Defaults keep behaviour as in M5.** The personal access token stays the default (no App ID), the evaluated `review-v1` prompt stays the default, and Terraform enables inline comments only for secret findings (`secrets`).
+- **Known limits.** The Checks API named in FR-020 is not used; the commit status remains the signal. `language` accepts only `en` because OQ-03 is open. Inline AI comments depend on the model counting line numbers correctly, which is unmeasured. The deploy role from M5 can read the App key through SSM (SECURITY.md §5.10).
+- **Open questions** (none settled here): OQ-03 (comment language; `language` is a placeholder that accepts `en`), OQ-05 (Gemini tier and budget; also blocks the `review-v2` evaluation), OQ-06 (bot identity: the App now offers one, but whether to use it is the owner's choice), OQ-08 and OQ-10 as before. OQ-09 (drafts) is unchanged.
+- **Doc status changes to confirm.** ADR-0006 changed from Proposed to Accepted; FR-020 to FR-022 from Proposed to Verified in code and tests; ADR-0010 and ADR-0011 are new.

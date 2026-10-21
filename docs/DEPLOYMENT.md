@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — **procedure not yet executed**. The code (M2–M3, M5), the Terraform stack (T-401, T-501, T-506), the bootstrap stack and the deploy workflow (T-505) exist and are tested without AWS; the first real deploy is T-402 |
+| Status | Draft v0.1 — **procedure not yet executed**. The code (M2–M3, M5, M6), the Terraform stack (T-401, T-501, T-506, M6 additions), the bootstrap stack and the deploy workflow (T-505) exist and are tested without AWS or GitHub; the first real deploy is T-402 |
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) §14 · [Security](SECURITY.md) §6 · [Testing](TESTING_STRATEGY.md) §7 |
 
@@ -90,6 +90,29 @@ You can leave `/mergeguard/gemini_api_key` as the placeholder. MergeGuard then s
 
 Store the real key only after the Gemini tier is decided ([OQ-05](PRD.md#17-open-questions)), because from then on live PR diffs go to Google.
 
+### 3.4 Optional: authenticate as a GitHub App (FR-020)
+
+Written in M6, **never run**. An App gives reviews a proper bot identity (`<app-slug>[bot]`), removes the own-PR limitation (FR-010), and replaces the personal access token with short-lived tokens scoped to one repository ([ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md)). Skip this section to keep using the token of §3.1.
+
+1. **Create the App** (*Settings → Developer settings → GitHub Apps → New GitHub App*):
+   - **Webhook:** active; URL is the `github_webhook_url` output (after the first apply); secret is the same webhook secret as in §3.
+   - **Repository permissions:** *Pull requests: Read and write*, *Contents: Read-only*, *Commit statuses: Read and write*, *Metadata: Read-only*. Ask only for what you use: request *Contents* only with `repo_config_enabled`, and *Commit statuses* only with `commit_status_enabled`; GitHub refuses a token for a permission the App lacks.
+   - **Subscribe to events:** *Pull request*.
+   - **Where can it be installed:** only on your account, unless you intend to share it.
+2. **Generate a private key** (a `.pem` download). Store it in SSM, then **delete the file**. Never commit it or paste it anywhere:
+
+   ```bash
+   aws ssm put-parameter --name "/mergeguard/github_app_private_key" --type SecureString --overwrite --value file://app-key.pem --region us-east-1
+   shred -u app-key.pem   # or delete it securely; PowerShell: Remove-Item app-key.pem
+   ```
+
+   The key must be an unencrypted RSA key of 2048 to 8192 bits, which is what GitHub issues.
+3. **Set the App ID** (shown on the App's page; not a secret) in `terraform.tfvars`, for example `github_app_id = "123456"`, and apply. The worker now reads the App key and never the personal access token, which may stay a placeholder.
+4. **Install the App** on each repository (*App settings → Install App*). Webhooks now come through the App. **Remove any repository webhook** that points at the same URL, or every pull request is reviewed twice.
+5. **Check** that a review shows `<app-slug>[bot]` as its author and that two repositories work.
+
+If a review shows `github.forbidden` or `github.invalid_request` right after a token request, see the runbook (§10).
+
 ## 4. Terraform configuration
 
 These variables live in `terraform/variables.tf` and are used by `terraform/main.tf` and `terraform/alerts.tf`, with validation for the limits stated below. Defaults reproduce the brief where the brief had a value.
@@ -109,6 +132,10 @@ These variables live in `terraform/variables.tf` and are used by `terraform/main
 | `scan_allow_paths` | `[]` | Path globs whose findings are suppressed and listed in the review, for example `["tests/fixtures/**"]` → `MERGEGUARD_SCAN_ALLOW_PATHS`. Operator-only; a bare wildcard is rejected |
 | `alert_email` | unset | Address for alarm and budget notifications. AWS sends a confirmation email that must be accepted |
 | `monthly_budget_usd` | unset | Monthly cost budget in USD. **Unset creates no budget**: the amount is the owner's decision ([OQ-05](PRD.md#17-open-questions)). Needs `alert_email` |
+| `github_app_id` | unset | GitHub App ID or client ID → `MERGEGUARD_GITHUB_APP_ID`. Unset keeps the personal access token. The private key is the `github_app_private_key` SSM parameter (§3.4) |
+| `inline_comments` | `secrets` | `off`, `secrets` or `all` → `MERGEGUARD_INLINE_COMMENTS`. `secrets` posts inline comments for secret findings only. `all` also asks the model for per-line findings with the longer `review-v2` prompt, which has **not been evaluated** (T-304, [OQ-05](PRD.md#17-open-questions)); try it on a sandbox repository first |
+| `repo_config_enabled` | `true` | Read `.github/mergeguard.json` from the pull request's base commit → `MERGEGUARD_REPO_CONFIG`. Needs *Contents: Read* (§4.1) |
+| `repo_config_block_levels` | `["MEDIUM", "HIGH"]` | The levels a repository file may choose for `block_on` → `MERGEGUARD_REPO_CONFIG_BLOCK_LEVELS`. `["MEDIUM"]` forbids relaxing the default |
 | `log_retention_days` | `14` | CloudWatch retention |
 | `param_prefix` | `/mergeguard` | SSM prefix → `MERGEGUARD_PARAM_PREFIX` |
 | `gemini_model` | `gemini-2.5-flash` | → `MERGEGUARD_GEMINI_MODEL` |
@@ -121,24 +148,50 @@ These variables live in `terraform/variables.tf` and are used by `terraform/main
 
 Put local overrides in `terraform/terraform.tfvars`, which must be git-ignored. It must never contain secrets.
 
+### 4.1 Repository configuration file
+
+Optional, JSON, at `.github/mergeguard.json` in the **base branch** of the repository. A change takes effect after it is merged, not on the pull request that proposes it ([ADR-0011](ADR/0011-repository-config-from-the-base-commit.md)).
+
+```json
+{
+  "version": 1,
+  "block_on": "HIGH",
+  "ai_review": true,
+  "ignore_paths": ["docs/**", "**/*.lock"],
+  "inline_comments": "secrets",
+  "language": "en"
+}
+```
+
+| Key | Meaning | Bound |
+| --- | --- | --- |
+| `version` | Must be `1` if present | — |
+| `block_on` | Lowest AI risk level that requests changes. AI bugs and secret findings always block | One of the operator's `repo_config_block_levels` |
+| `ai_review` | `false` keeps this repository's diffs from the AI (nothing is posted when the scan is clean) | — |
+| `ignore_paths` | Globs kept from the AI. They are still scanned for secrets | At most 50, relative, not only wildcards |
+| `inline_comments` | `off`, `secrets` or `all` | Never above the operator's mode |
+| `language` | `en` | Only `en` until [OQ-03](PRD.md#17-open-questions) is decided |
+
+It cannot disable the secret scan or add suppressions. Any invalid key or value makes the **whole file** ignored: the defaults apply and the review says so, with a reason (`invalid_json`, `too_large`, `unknown_key`, `unsupported_version`, `invalid_field` or `out_of_bounds`). Keep it under 16 KB.
+
 ## 5. Deploy
 
 ```bash
 terraform -chdir=terraform init
 terraform -chdir=terraform test          # no credentials needed; mocked AWS provider
 terraform -chdir=terraform plan -out=tfplan
-# Review the plan: 26 resources to add with the defaults (table below)
+# Review the plan: 27 resources to add with the defaults (table below)
 terraform -chdir=terraform apply tfplan
 terraform -chdir=terraform output -raw github_webhook_url
 ```
 
 The brief used `terraform apply -auto-approve`. Reviewing a saved plan is the default here, because the plan shows exactly which IAM permissions are about to be granted.
 
-**What the plan creates** (verified without credentials by `terraform test`; 26 resources with `alert_email` and `monthly_budget_usd` unset):
+**What the plan creates** (verified without credentials by `terraform test`; 27 resources with `alert_email` and `monthly_budget_usd` unset):
 
 | Resource | Purpose |
 | --- | --- |
-| `aws_ssm_parameter.secret` (3) | `github_token`, `webhook_secret`, `gemini_api_key` as `SecureString` placeholders (§3) |
+| `aws_ssm_parameter.secret` (4) | `github_token`, `webhook_secret`, `gemini_api_key` and (M6) `github_app_private_key` as `SecureString` placeholders (§3) |
 | `aws_iam_role.lambda`, `aws_iam_role_policy.lambda` | Receiver role: its own logs, the webhook secret, `sqs:SendMessage` on the review queue ([SECURITY.md](SECURITY.md) §5.3) |
 | `aws_iam_role.worker`, `aws_iam_role_policy.worker` | Worker role: its own logs, the GitHub token and the Gemini key, and the review queue |
 | `aws_sqs_queue.review_requests`, `.dlq`, `aws_sqs_queue_redrive_allow_policy.dlq` | The review queue (1 day retention, SSE-SQS) and its dead-letter queue (14 days); only the review queue may redrive into it |
@@ -244,6 +297,11 @@ To deploy automatically after a merge, add `push: branches: [main]` to `deploy.y
 | GitHub shows "timed out", but the review appears | Synchronous AI call exceeded GitHub's 10 s timeout (R-01) | Phase 1 only. With the queue, *Recent Deliveries* shows `202`; if timeouts still appear, check the receiver's log for `queue.failed` or slow SSM calls |
 | Alarm `mergeguard-review-dlq-not-empty`, or messages in the dead-letter queue | A review request failed three times (worker log: `github.*`, `config.failed`, `error.unhandled`, `worker.rejected`) | Find the cause with the `delivery_id` in the worker log group and fix it (expired token, missing permission, bad setting). Then redrive: *SQS → the DLQ → Start DLQ redrive*, or `aws sqs start-message-move-task --source-arn <dlq-arn>`. Messages are metadata only and expire after 14 days |
 | Alarm `mergeguard-webhook-5xx` | The receiver returned `500`: the webhook secret is missing or a placeholder (`config.failed`), SQS refused the send (`queue.failed`), or an unexpected error | Fix the cause, then redeliver the failed deliveries from GitHub (it does not retry) |
+| `github.auth_failed`, `github.forbidden` or `github.invalid_request` on the first call of a review in App mode | The token request failed: `401` the key or App ID is wrong; `404` the App is not installed on that repository; `422` a permission the code requests was not granted to the App (*Contents* with `repo_config_enabled`, *Commit statuses* with `commit_status_enabled`) | Grant the permission in the App's settings and accept it on the installation, or switch the matching setting off |
+| `config.failed` in App mode | The App private key is a placeholder, unreadable, below 2048 bits, encrypted or not RSA, or the webhook did not come through an App installation | Store a valid key (§3.4); make sure the webhook is the App's, not a repository webhook |
+| Pull requests are reviewed twice | Both a repository webhook and the App's webhook point at the URL | Remove the repository webhook (§3.4 step 4) |
+| A review says the repository configuration was ignored | The file in the base branch is invalid or outside the bounds; the reason is in the notice and in `repo_config.invalid` | Fix the file on the base branch (§4.1) |
+| No inline comments appear | `inline_comments` is `off`, the repository lowered it, or GitHub refused the comments (`review.inline_dropped`; the review itself is posted) | Check the mode and the log; the summary review lists every finding |
 | Alarm `mergeguard-*-lambda-errors` | A timeout, an out-of-memory kill or an import-time crash that the handler could not catch | Check the log group for `Task timed out` or a traceback; raise `worker_timeout_seconds` or `worker_memory_mb`, or fix the code |
 | Check `mergeguard/review` stays `pending` | The worker is down or retrying, or the final status call failed | Look in the dead-letter queue and the worker log. A retry sets the final status without a new review. As a last resort, redeliver the webhook |
 | No `mergeguard/review` status at all | `commit_status_enabled` is false, the token lacks *Commit statuses: Read and write* (log `status.failed`, `forbidden`), or the PR has no reviewable patch | Enable the setting or add the permission |
