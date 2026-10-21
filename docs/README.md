@@ -12,7 +12,7 @@ Documentation for MergeGuard AI, a serverless DevSecOps pull-request reviewer. F
 | **Assumption** | Treated as true for planning; must be validated |
 | **Open** / **TBD** | Undecided; tracked as `OQ-` items in [PRD.md](PRD.md) §17 |
 
-As of 2026-10-21, M1 to M4 are Verified by automated tests: Gemini is mocked, and the Terraform plan is tested against a mocked AWS provider. **Nothing is deployed**, and no real Gemini call has been made (OQ-05).
+As of 2026-10-21, M1 to M5 are Verified by automated tests: Gemini is mocked, SQS and GitHub are faked, and the Terraform plans are tested against a mocked AWS provider. **Nothing is deployed**, the CI deploy workflow has never run, and no real Gemini call has been made (OQ-05). Properties that need AWS (acknowledgement latency, alarms firing, the deploy itself) are Planned until T-402 and T-403.
 
 ## Core documents
 
@@ -27,7 +27,7 @@ As of 2026-10-21, M1 to M4 are Verified by automated tests: Gemini is mocked, an
 
 | Document | Purpose |
 | --- | --- |
-| [API_SPEC.md](API_SPEC.md) | Inbound webhook contract; outbound GitHub, Gemini and SSM calls; error mapping; Phase 2 queue message |
+| [API_SPEC.md](API_SPEC.md) | Inbound webhook contract; outbound GitHub, Gemini, SSM and SQS calls; error mapping; queue message |
 | [SECURITY.md](SECURITY.md) | Assets, trust boundaries, threat model (`TM-`), controls, secret rotation, incident runbooks, vulnerability reporting |
 | [AI_SYSTEM.md](AI_SYSTEM.md) | Role of AI, data handling, prompt architecture, output schema, failure handling, evaluation, model lifecycle |
 | [TESTING_STRATEGY.md](TESTING_STRATEGY.md) | Test layers, fixtures, scanner corpus, security tests, E2E scenarios, quality gates |
@@ -41,9 +41,11 @@ As of 2026-10-21, M1 to M4 are Verified by automated tests: Gemini is mocked, an
 | [0002](ADR/0002-zero-runtime-dependencies.md) | Zero runtime dependencies | Accepted (brief) |
 | [0003](ADR/0003-secrets-in-ssm-parameter-store.md) | Secrets in SSM Parameter Store | Accepted (brief) |
 | [0004](ADR/0004-secret-scan-gate-before-ai.md) | Secret scan gates AI review | Accepted (brief) |
-| [0005](ADR/0005-async-webhook-processing.md) | Asynchronous webhook processing | Proposed |
+| [0005](ADR/0005-async-webhook-processing.md) | Asynchronous webhook processing | Accepted (implemented M5, not deployed) |
 | [0006](ADR/0006-github-identity-pat-then-app.md) | GitHub identity: PAT, then GitHub App | Proposed |
 | [0007](ADR/0007-ssm-placeholders-with-write-only-values.md) | SSM placeholders with write-only values | Accepted |
+| [0008](ADR/0008-scanner-suppressions-are-visible-and-withheld-from-ai.md) | Scanner suppressions are visible and withheld from the AI | Accepted (implemented M5) |
+| [0009](ADR/0009-ci-deploy-with-oidc-and-opt-in-remote-state.md) | CI deploy with GitHub OIDC and opt-in remote state | Accepted (written M5, never run) |
 
 See the [ADR index](ADR/README.md) for the process.
 

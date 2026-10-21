@@ -14,8 +14,10 @@ DEFAULT_MAX_DIFF_CHARS = 12_000  # from the brief
 MAX_DIFF_CHARS_LIMIT = 200_000
 SECRET_TTL_SECONDS = 900.0  # 15 minutes, so rotations apply without a redeploy
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+GITHUB_TOKEN_NAME = "github_token"  # noqa: S105 - a parameter name, not a secret
+WEBHOOK_SECRET_NAME = "webhook_secret"  # noqa: S105 - a parameter name, not a secret
 # Needed for every delivery; loaded first and fail closed.
-CORE_SECRET_NAMES = ("github_token", "webhook_secret")
+CORE_SECRET_NAMES = (GITHUB_TOKEN_NAME, WEBHOOK_SECRET_NAME)
 # Loaded only when an AI review is actually requested, so a missing Gemini key
 # degrades to the AI-unavailable comment instead of blocking the secret gate.
 GEMINI_KEY_NAME = "gemini_api_key"
@@ -24,10 +26,18 @@ GEMINI_KEY_NAME = "gemini_api_key"
 # closed, and a placeholder Gemini key means no diff is ever sent to Gemini.
 PLACEHOLDER_PREFIX = "mergeguard-placeholder"
 
+MAX_ALLOW_PATHS = 50
+MAX_ALLOW_PATH_LENGTH = 200
+
 _TRUE = frozenset({"1", "true", "yes"})
 _FALSE = frozenset({"0", "false", "no"})
 # The model ID becomes part of the Gemini URL path, so it is strictly validated.
 _MODEL_RE = re.compile(r"[a-z0-9][a-z0-9.-]{0,63}")
+# The receiver only ever talks to this SQS queue (FR-016).
+_QUEUE_URL_RE = re.compile(
+    r"https://sqs\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?/\d{12}/[A-Za-z0-9_-]{1,80}"
+)
+_ALLOW_PATH_RE = re.compile(r"[A-Za-z0-9_./*?@+=~ -]+")
 
 
 class ConfigError(Exception):
@@ -44,6 +54,13 @@ class Settings:
     dry_run: bool
     gemini_model: str = DEFAULT_GEMINI_MODEL
     max_diff_chars: int = DEFAULT_MAX_DIFF_CHARS
+    # Phase 2. A queue URL turns the handler into the receiver (FR-016); unset
+    # keeps the synchronous Phase 1 behaviour used by tests and local runs.
+    queue_url: str | None = None
+    # FR-017. Off unless enabled: the token also needs "Commit statuses: write".
+    commit_status: bool = False
+    # FR-019. Operator-defined path globs whose findings are suppressed.
+    scan_allow_paths: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> "Settings":
@@ -70,6 +87,9 @@ class Settings:
                 DEFAULT_MAX_DIFF_CHARS,
                 MAX_DIFF_CHARS_LIMIT,
             ),
+            queue_url=_queue_url_setting(environ),
+            commit_status=_bool_setting(environ, "MERGEGUARD_COMMIT_STATUS"),
+            scan_allow_paths=_allow_paths_setting(environ),
         )
 
 
@@ -116,6 +136,14 @@ class SecretStore:
     def get(self) -> Secrets:
         """The secrets every delivery needs (FR-011). Fails closed."""
         return Secrets(**self._values(CORE_SECRET_NAMES))
+
+    def webhook_secret(self) -> str:
+        """Only the webhook secret: all the receiver is allowed to read."""
+        return self._values((WEBHOOK_SECRET_NAME,))[WEBHOOK_SECRET_NAME]
+
+    def github_token(self) -> str:
+        """Only the GitHub token: what the worker needs besides the Gemini key."""
+        return self._values((GITHUB_TOKEN_NAME,))[GITHUB_TOKEN_NAME]
 
     def gemini_api_key(self) -> str:
         """The Gemini key, read only when an AI review is requested (M3)."""
@@ -173,6 +201,44 @@ def _int_setting(
     if not 1 <= value <= maximum:
         raise ConfigError(f"{name} must be between 1 and {maximum}")
     return value
+
+
+def _queue_url_setting(environ: Mapping[str, str]) -> str | None:
+    raw = environ.get("MERGEGUARD_QUEUE_URL", "").strip()
+    if not raw:
+        return None
+    if not _QUEUE_URL_RE.fullmatch(raw):
+        raise ConfigError("MERGEGUARD_QUEUE_URL must be an SQS queue URL")
+    return raw
+
+
+def _allow_paths_setting(environ: Mapping[str, str]) -> tuple[str, ...]:
+    """Comma-separated path globs. Invalid entries fail closed, so a typo can
+    never silently widen what the scanner ignores."""
+    patterns = tuple(
+        item.strip()
+        for item in environ.get("MERGEGUARD_SCAN_ALLOW_PATHS", "").split(",")
+        if item.strip()
+    )
+    if len(patterns) > MAX_ALLOW_PATHS:
+        raise ConfigError(
+            f"MERGEGUARD_SCAN_ALLOW_PATHS allows at most {MAX_ALLOW_PATHS} patterns"
+        )
+    for pattern in patterns:
+        valid = (
+            len(pattern) <= MAX_ALLOW_PATH_LENGTH
+            and _ALLOW_PATH_RE.fullmatch(pattern) is not None
+            and not pattern.startswith("/")
+            and ".." not in pattern
+            # A pattern of only wildcards would switch the gate off.
+            and pattern.strip("*?/")
+        )
+        if not valid:
+            raise ConfigError(
+                "MERGEGUARD_SCAN_ALLOW_PATHS has an invalid pattern; use relative "
+                "path globs such as tests/fixtures/**"
+            )
+    return patterns
 
 
 def _bool_setting(environ: Mapping[str, str], name: str) -> bool:

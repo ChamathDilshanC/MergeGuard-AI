@@ -8,13 +8,18 @@ import base64
 import copy
 import hashlib
 import hmac
+import io
 import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import lambda_function
+import worker_function
+from mergeguard.config import SecretStore
 from mergeguard.http import HttpResponse
+from mergeguard.review_queue import ReviewQueue
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -210,20 +215,128 @@ def fixture_response(relative: str, status: int = 200) -> HttpResponse:
     return HttpResponse(status, {}, (FIXTURES / relative).read_bytes())
 
 
+def pull_state(head_sha: str = HEAD_SHA, state: str = "open") -> HttpResponse:
+    """Response of ``GET /pulls/{n}``: what the worker re-checks."""
+    return json_response(200, {"state": state, "head": {"sha": head_sha}})
+
+
 def github_api(
     *,
     files: list[dict] | None = None,
     reviews: list[dict] | None = None,
     review_responses: tuple[Any, ...] = (json_response(200, {"id": 1}),),
     gemini: tuple[Any, ...] = (gemini_response(),),
+    pull: tuple[Any, ...] = (pull_state(),),
+    status_responses: tuple[Any, ...] = (json_response(201, {}),),
+    dismissal_responses: tuple[Any, ...] = (json_response(200, {}),),
 ) -> FakeTransport:
     """A fake GitHub API (one page of files, reviews, authenticated user, review
-    creation) plus a mocked Gemini endpoint. No real Gemini call is ever made."""
+    creation, pull state, commit statuses, dismissals) plus a mocked Gemini
+    endpoint. No real Gemini call is ever made."""
     return (
         FakeTransport()
         .route("GET", r"/pulls/\d+/files", json_response(200, files or []))
         .route("GET", r"/pulls/\d+/reviews", json_response(200, reviews or []))
+        .route("GET", r"/pulls/\d+$", *pull)
         .route("GET", r"/user$", json_response(200, {"login": BOT_LOGIN}))
         .route("POST", r"/pulls/\d+/reviews$", *review_responses)
+        .route("PUT", r"/pulls/\d+/reviews/\d+/dismissals$", *dismissal_responses)
+        .route("POST", r"/statuses/[0-9a-f]+$", *status_responses)
         .route("POST", GEMINI_ROUTE, *gemini)
     )
+
+
+class FakeSqs:
+    """Records ``send_message`` calls; may be told to fail."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.sent: list[dict[str, str]] = []
+
+    def send_message(self, *, QueueUrl: str, MessageBody: str) -> dict:
+        if self.error is not None:
+            raise self.error
+        self.sent.append({"QueueUrl": QueueUrl, "MessageBody": MessageBody})
+        return {"MessageId": "m-1"}
+
+
+QUEUE_URL = (
+    "https://sqs.us-east-1.amazonaws.com/123456789012/mergeguard-review-requests"
+)
+
+
+class _LogCapture:
+    logs: io.StringIO
+
+    def records(self) -> list[dict]:
+        return [json.loads(line) for line in self.logs.getvalue().splitlines()]
+
+    def events(self) -> list[str]:
+        return [record["event"] for record in self.records()]
+
+
+class Harness(_LogCapture):
+    """The receiver / inline handler with a fake GitHub, SSM and (optionally)
+    SQS. Without ``sqs`` the review runs inline, as in Phase 1."""
+
+    def __init__(
+        self,
+        transport: FakeTransport,
+        env: dict | None = None,
+        ssm: "FakeSsm | None" = None,
+        sqs: "FakeSqs | None" = None,
+    ) -> None:
+        self.transport = transport
+        self.env = env or {}
+        self.ssm = ssm or FakeSsm()
+        self.sqs = sqs
+        self.logs = io.StringIO()
+
+    def __call__(self, event: dict, context=None) -> tuple[int, dict]:
+        store = SecretStore("/mergeguard", lambda: self.ssm)
+        queue = (
+            None if self.sqs is None else lambda url: ReviewQueue(url, lambda: self.sqs)
+        )
+        response = lambda_function.handle(
+            event,
+            context,
+            environ=self.env,
+            secrets=lambda prefix: store,
+            transport=self.transport,
+            queue=queue,
+            stream=self.logs,
+        )
+        assert response["headers"] == {"Content-Type": "application/json"}
+        return response["statusCode"], json.loads(response["body"])
+
+
+class WorkerHarness(_LogCapture):
+    """The SQS worker with a fake GitHub and SSM. No Gemini call is real."""
+
+    def __init__(
+        self,
+        transport: FakeTransport,
+        env: dict | None = None,
+        ssm: "FakeSsm | None" = None,
+    ) -> None:
+        self.transport = transport
+        self.env = env or {}
+        self.ssm = ssm or FakeSsm()
+        self.logs = io.StringIO()
+
+    def __call__(self, *bodies: Any, context=None) -> dict:
+        event = {
+            "Records": [
+                {"messageId": f"m-{index}", "body": body}
+                for index, body in enumerate(bodies)
+            ]
+        }
+        store = SecretStore("/mergeguard", lambda: self.ssm)
+        return worker_function.handle(
+            event,
+            context,
+            environ=self.env,
+            secrets=lambda prefix: store,
+            transport=self.transport,
+            stream=self.logs,
+        )

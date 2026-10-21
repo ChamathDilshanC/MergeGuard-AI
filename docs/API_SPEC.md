@@ -2,11 +2,11 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — inbound contract (§2), GitHub and SSM calls (§3, §5) implemented in M2; Gemini (§4) implemented in M3 and tested only against mocked responses; **nothing is deployed yet** |
+| Status | Draft v0.1 — inbound contract (§2), GitHub and SSM calls (§3, §5) implemented in M2; Gemini (§4) implemented in M3 and tested only against mocked responses; the receiver's `202`, the SQS send and queue message (§6), and the pull state, commit status and dismissal calls (§3.1) implemented in M5 and tested with fakes. **Nothing is deployed yet** |
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) · [AI system](AI_SYSTEM.md) · [Security](SECURITY.md) |
 
-MergeGuard exposes **one inbound endpoint** (the GitHub webhook receiver) and calls **three outbound APIs**: the GitHub REST API, the Google Gemini API, and AWS SSM. It has no user-facing REST API, SDK, or CLI.
+MergeGuard exposes **one inbound endpoint** (the GitHub webhook receiver) and calls **four outbound APIs**: the GitHub REST API, the Google Gemini API, AWS SSM and, from Phase 2, AWS SQS. It has no user-facing REST API, SDK, or CLI.
 
 ## 1. Conventions
 
@@ -62,10 +62,14 @@ Only these fields of the GitHub `pull_request` event payload are read. Everythin
 | Action not in allow-list, or draft PR | `200` | `ignored` | `action_not_supported`, `draft` |
 | No file with a patch | `200` | `skipped` | `no_patches` |
 | Review already exists for this head SHA | `200` | `duplicate` | — |
-| Review posted (Phase 1, synchronous) | `200` | `reviewed` | `REQUEST_CHANGES`, `COMMENT` |
+| Review posted (inline mode, `MERGEGUARD_QUEUE_URL` unset) | `200` | `reviewed` | `REQUEST_CHANGES`, `COMMENT` |
+| Pull request moved on or closed (inline mode never checks) | `200` | `skipped` | `stale_head`, `pr_closed` (worker log only; the receiver has already answered `202`) |
 | Dry run completed | `200` | `dry_run` | decision value |
-| Work accepted for async processing (Phase 2) | `202` | `accepted` | — |
+| Review request queued (receiver mode, `MERGEGUARD_QUEUE_URL` set) | `202` | `accepted` | — (no `reason`) |
+| Queue send failed | `500` | `error` | `internal` (`queue.failed` in logs; GitHub does not retry, so redeliver) |
 | Configuration, SSM, GitHub auth, rate-limit or unexpected error | `500` | `error` | `internal` (details only in logs) |
+
+In receiver mode the response is sent as soon as the message is queued, so the outcome of the review (`reviewed`, `duplicate`, `skipped`, `dry_run`) appears only in the worker's logs (`worker.completed`). The receiver needs no GitHub call, so it answers well inside GitHub's 10-second limit (SM-2, measured in T-403).
 
 Ignored events deliberately return `2xx`, so GitHub's *Recent Deliveries* list only shows real failures. Any path or method other than `POST /webhook` gets API Gateway's own `404` and never reaches Lambda.
 
@@ -112,8 +116,9 @@ Content-Type: application/json
 | List reviews (duplicate check) | `GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews?per_page=100&page={n}` | 1 | Up to 10 pages. A duplicate needs matching `commit_id`, the `mergeguard:v1` marker in `body`, **and** `user.login` equal to the token owner |
 | Identify the token owner | `GET /user` | 1 | Cached per client. Used so a copied marker in someone else's review cannot suppress MergeGuard ([SECURITY.md](SECURITY.md) TM-14) |
 | Create review | `POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews` | 1 | Body below |
-| Dismiss a review | `PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals` | 2 | Body: `{"message": "...", "event": "DISMISS"}` (FR-018) |
-| Create commit status | `POST /repos/{owner}/{repo}/statuses/{sha}` | 2 | `context: "mergeguard/review"` (FR-017) |
+| Read the pull request | `GET /repos/{owner}/{repo}/pulls/{pull_number}` | 2 | The worker reads `head.sha` and `state` before the AI call and again before posting; a moved head or a closed PR skips the work (PRD EC-07, EC-14) |
+| Dismiss a review | `PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals` | 2 | Body: `{"message": "...", "event": "DISMISS"}` (FR-018). Only the bot's own older `CHANGES_REQUESTED` reviews that carry the marker |
+| Create commit status | `POST /repos/{owner}/{repo}/statuses/{sha}` | 2 | Body: `{"state", "context": "mergeguard/review", "description"}` with `description` cut to 140 characters (FR-017). Off unless `MERGEGUARD_COMMIT_STATUS` is `true` |
 
 **Create-review request body:**
 
@@ -136,10 +141,12 @@ Content-Type: application/json
 | `403` otherwise / `404` | Missing permission, or repository not covered by the token | Log `github.forbidden`; respond `500` |
 | `422` on create review with `REQUEST_CHANGES` | Typically "cannot request changes on your own pull request" | Retry once as `COMMENT` with fallback note (FR-010) |
 | `422` otherwise | Invalid body (for example too long) | Log `github.invalid_request`; respond `500` |
-| `5xx`, or no response (DNS, TLS, timeout) | GitHub outage or network failure | `GET`: one retry if time allows, otherwise `500`. `POST`: no retry (the review may already exist); log `github.unavailable`; `500` |
+| `5xx`, or no response (DNS, TLS, timeout) | GitHub outage or network failure | `GET`: one retry if time allows, otherwise `500`. `POST` and `PUT`: no retry (the review, status or dismissal may already exist); log `github.unavailable`; `500` |
 | Any other status, or a body that is not the expected JSON | Unexpected response | Log `github.unexpected`; respond `500` |
 
-### 3.3 Token permissions (fine-grained PAT, Phase 1)
+**Status and dismissal calls are signals, not part of the review.** A permanent failure of a commit status or a dismissal (`401`-`404`, `422`: a missing permission, or a protected branch that refuses the dismissal) is logged (`status.failed`, `review.dismissal_failed`, WARNING) and the review stands. A transient failure (`429`, `5xx`, no response) is raised like any other, so the worker retries the message and the duplicate path finishes the job.
+
+### 3.3 Token permissions (fine-grained PAT)
 
 | Permission | Access | Why |
 | --- | --- | --- |
@@ -147,7 +154,9 @@ Content-Type: application/json
 | Pull requests | Read and write | List files and reviews; create and dismiss reviews |
 | Contents | Read | Listed in the brief; keep until tests confirm it is not needed |
 | Metadata | Read (always included) | Required by GitHub |
-| Commit statuses | Read and write | Phase 2 (FR-017) |
+| Commit statuses | Read and write | Phase 2 (FR-017); needed while `commit_status_enabled` is true (the Terraform default) |
+
+Dismissing a review on a protected branch can additionally require the token owner to be allowed to dismiss reviews in the branch rule; if not, GitHub refuses and MergeGuard logs `review.dismissal_failed`.
 
 ## 4. Outbound — Google Gemini API
 
@@ -199,7 +208,11 @@ Content-Type: application/json
 
 ## 6. Internal — queue message (Phase 2)
 
-**Status:** Proposed ([ADR-0005](ADR/0005-async-webhook-processing.md)). Contains metadata only; the worker fetches code itself.
+**Status:** Implemented in M5 ([ADR-0005](ADR/0005-async-webhook-processing.md)), tested with a fake SQS client, not deployed. Contains metadata only; the worker fetches code itself.
+
+**Send.** The receiver calls SQS `SendMessage` with `QueueUrl` from `MERGEGUARD_QUEUE_URL` (validated as an `https://sqs.<region>.amazonaws.com/<account>/<name>` URL) and the message below as `MessageBody`. The client uses a 2 s connect timeout, a 3 s read timeout and two attempts, so the acknowledgement stays fast. A failure becomes `500` with `queue.failed` and no AWS error text.
+
+**Receive.** The worker takes one message per invocation (`batch_size` 1) and answers `{"batchItemFailures": [{"itemIdentifier": "<messageId>"}]}` for a message it could not finish. SQS then makes the message visible again after the visibility timeout (six times the worker timeout) and, after `queue_max_receive_count` (3) receives, moves it to the dead-letter queue. The worker validates every field: `delivery_id` (letters, digits, `-`, at most 64), `repository` (`owner/name`, no `.` or `..` part), `pull_number` (positive integer), `head_sha` (40 or 64 hex), `action` (a reviewable action). Anything else is `worker.rejected` and is retried, then dead-lettered.
 
 ```json
 {

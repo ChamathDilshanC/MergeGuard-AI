@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — templates (§5, except §5.6 and `N-SUPPRESSED`), sanitisation, log conventions (§7) and rule IDs (§8) implemented in M2–M3 and snapshot-tested |
+| Status | Draft v0.1 — templates (§5), sanitisation, log conventions (§7) and rule IDs (§8) implemented in M2–M3 and snapshot-tested; the commit status (§5.6), `N-SUPPRESSED`, the queue and worker log events and the Phase 2 resource names implemented in M5 and tested with fakes. Nothing is deployed |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) · [API spec](API_SPEC.md) · [AI system](AI_SYSTEM.md) |
 
@@ -29,7 +29,7 @@ This design system therefore defines content, structure, and interface conventio
 | ID | Surface | Audience | Phase | Defined in |
 | --- | --- | --- | --- | --- |
 | S1 | PR review (summary comment) | PR author, reviewer | 1 | §5 |
-| S2 | Commit status `mergeguard/review` | PR author, branch protection | 2 | §5.6 |
+| S2 | Commit status `mergeguard/review` | PR author, branch protection | 2 (implemented M5, not deployed) | §5.6 |
 | S3 | Inline review comments | PR author | 3 | FR-021 (template TBD in Phase 3) |
 | S4 | Webhook HTTP responses (visible in GitHub *Recent Deliveries*) | Repository admin | 1 | §6 |
 | S5 | Structured logs | Operator | 1 | §7 |
@@ -158,7 +158,7 @@ No credentials were detected in the added lines. The AI review could not be comp
 | `N-PARTIAL-DIFF` | Diff exceeded `MERGEGUARD_MAX_DIFF_CHARS` | `> [!NOTE]` + "Partial AI review: the diff exceeded <n> characters. Not reviewed by AI: `<files>`." |
 | `N-PARTIAL-FILES` | File cap reached | `> [!NOTE]` + "Only the first <n> changed files were checked." |
 | `N-NO-PATCH` | Some files had no patch | `> [!NOTE]` + "Not reviewed (binary or too large): `<files>`." |
-| `N-SUPPRESSED` | Phase 2 suppressions | `> [!NOTE]` + "<n> finding(s) suppressed by `mergeguard:ignore-secret` or path allow-list." |
+| `N-SUPPRESSED` | One or more findings were suppressed (FR-019) | `> [!NOTE]` + "<n> finding(s) suppressed by `mergeguard:ignore-secret` or path allow-list. These lines were not sent to the AI.", then one `> - <rule label>: `<file>` line <n> (inline marker \| path allow-list)` bullet per suppression, at most 25, then "…and <n> more." |
 
 ### 5.5 `T-FALLBACK` — own-PR note (FR-010)
 
@@ -171,13 +171,24 @@ When GitHub rejects `REQUEST_CHANGES` with `422` because the token owner authore
 
 ### 5.6 Commit status (Phase 2, FR-017)
 
-| State | `description` (≤ 140 chars) |
-| --- | --- |
-| `pending` | MergeGuard review in progress |
-| `failure` | Possible credentials found — see review |
-| `failure` | Changes requested by AI review — see review |
-| `success` | No blocking issues found |
-| `error` | MergeGuard could not complete the review |
+Context `mergeguard/review`, set on the head SHA. Off unless `MERGEGUARD_COMMIT_STATUS` is `true` (Terraform sets it by default), because the token then needs *Commit statuses: Read and write*.
+
+| State | `description` (≤ 140 chars) | When |
+| --- | --- | --- |
+| `pending` | MergeGuard review in progress | The PR is known to need a review: after the file list and the duplicate check, before the scan and the AI call |
+| `failure` | Possible credentials found — see review | Secret findings, even if GitHub made the review a comment (own-PR fallback) |
+| `failure` | Changes requested by AI review — see review | The policy decided `REQUEST_CHANGES` from the AI result |
+| `success` | No blocking issues found | The policy decided `COMMENT` (low risk, or AI unavailable), or the PR has no reviewable patches |
+| `error` | MergeGuard could not complete the review | The run failed (best effort; SQS then retries) |
+
+- The state follows the **decision**, not the posted event.
+- A redelivery or retry that finds its own review sets the final state from that review and never `pending`, so a crash between the review and the status cannot leave a check stuck.
+- A missing permission is logged (`status.failed`) and never stops the review.
+- With a dry run nothing is written.
+
+### 5.6.1 Dismissal message (FR-018)
+
+When a later review of the same pull request has no blocking result, each earlier `REQUEST_CHANGES` review of MergeGuard is dismissed. If that later review is *AI review unavailable* (`T-AIU`), only earlier `T-SEC` reviews are dismissed and an earlier `T-AI` block stays. The message is: "MergeGuard AI: superseded by the review of commit `<short-sha>`, which found no blocking issues. See the latest MergeGuard review."
 
 ### 5.7 Sanitisation of model output
 
@@ -220,11 +231,16 @@ One JSON object per line. Field names are `snake_case`.
 | `file_count` | integer | After fetching files | `12` |
 | `body_length` | integer | Dry run | `1834` |
 | `error_type` | string | Unhandled errors | `RuntimeError` |
+| `commit_state` | string | `status.set` | `failure` |
+| `suppressed` | integer | `scan.completed` | `1` |
+| `dismissed` | integer | `review.dismissed` | `2` |
 
 **Event names:**
 
 - **Webhook:** `webhook.received`, `webhook.rejected`, `webhook.ignored`, `webhook.completed`, `config.failed`.
-- **Pipeline:** `files.fetched`, `scan.completed`, `review.posted`, `review.fallback_comment`, `review.skipped`, `review.duplicate`, `review.dry_run`.
+- **Pipeline:** `files.fetched`, `scan.completed` (with `rule_ids` and `suppressed`), `review.posted`, `review.fallback_comment`, `review.skipped` (reasons include `no_patches`, `stale_head`, `pr_closed`), `review.duplicate`, `review.dry_run`.
+- **Signals:** `status.set` (with `commit_state`), `status.failed` (WARNING, with `reason` and `http_status`), `review.dismissed` (with `dismissed`), `review.dismissal_failed` (WARNING).
+- **Queue and worker:** `queue.enqueued` (receiver), `queue.failed` (receiver, ERROR), `worker.received`, `worker.completed` (with `status`, `reason`, `duration_ms`), `worker.rejected` (ERROR, `reason` `malformed_message`).
 - **GitHub errors:** `github.auth_failed`, `github.forbidden`, `github.invalid_request`, `github.rate_limited`, `github.unavailable`, `github.unexpected`.
 - **AI:** `ai.completed` (INFO, with `risk_level`, `model`, `prompt_version`, `duration_ms`) and `ai.failed` (WARNING, with `reason` instead of `risk_level`).
 - **Other:** `error.unhandled`.
@@ -237,8 +253,9 @@ One JSON object per line. Field names are `snake_case`.
 
 | Thing | Convention | Examples |
 | --- | --- | --- |
-| AWS resources | `mergeguard-<purpose>` (kebab case); names from the brief kept | `mergeguard-ai-pr-reviewer`, `mergeguard-webhook-gateway` |
-| IAM role and policy | Names from the brief | `mergeguard_lambda_exec_role`, `mergeguard_lambda_policy` |
+| AWS resources | `mergeguard-<purpose>` (kebab case); names from the brief kept | `mergeguard-ai-pr-reviewer` (the receiver), `mergeguard-ai-pr-worker`, `mergeguard-webhook-gateway`, `mergeguard-review-requests`, `mergeguard-review-requests-dlq`, `mergeguard-alerts` |
+| IAM role and policy | Names from the brief; the worker follows the same pattern | `mergeguard_lambda_exec_role`, `mergeguard_lambda_policy` (receiver), `mergeguard_worker_exec_role`, `mergeguard_worker_policy`; the CI role is `mergeguard-github-deploy` |
+| CloudWatch alarms | `mergeguard-<what>` | `mergeguard-review-dlq-not-empty`, `mergeguard-webhook-5xx`, `mergeguard-receiver-lambda-errors`, `mergeguard-worker-lambda-errors` |
 | SSM parameters | `<prefix>/<snake_case>` | `/mergeguard/github_token` |
 | Environment variables | `MERGEGUARD_<UPPER_SNAKE>` | `MERGEGUARD_GEMINI_MODEL` |
 | Terraform resources and variables | `snake_case` | `aws_lambda_function.pr_reviewer`, `log_retention_days` |
@@ -264,6 +281,7 @@ One JSON object per line. Field names are `snake_case`.
 2. Within about a minute, see a MergeGuard review (`T-SEC`, `T-AI` or `T-AIU`).
 3. Fix the issues (rotating credentials first if `T-SEC`) and push.
 4. See a new review for the new head SHA. From Phase 2, the commit status updates and stale blocking reviews are dismissed.
+5. If a finding is a false positive (a fixture, a documented example), add `mergeguard:ignore-secret` to that line, or ask the operator to add the path to the allow-list. The review will list the suppression.
 
 **Operator:** deploy ([DEPLOYMENT.md](DEPLOYMENT.md)) → add the webhook → confirm `ping` returns `200 pong` in *Recent Deliveries* → open a test PR → check logs.
 

@@ -12,7 +12,7 @@ AI is **advisory**. The Gemini model produces a first-pass review: a risk level,
 
 - cannot approve or merge;
 - cannot call tools or fetch URLs;
-- never sees a diff in which the deterministic secret scan found anything ([ADR-0004](ADR/0004-secret-scan-gate-before-ai.md)).
+- never sees a diff in which the deterministic secret scan found anything ([ADR-0004](ADR/0004-secret-scan-gate-before-ai.md)), nor a line that the scanner flagged but a suppression waved through ([ADR-0008](ADR/0008-scanner-suppressions-are-visible-and-withheld-from-ai.md)).
 
 ## 2. Model and provider
 
@@ -35,6 +35,7 @@ Model availability and names change over time. Confirm that the configured model
 | PR title, description, labels, author, repository name | **No** (Phase 1) | Reduces both data exposure and the prompt-injection surface |
 | Secrets, tokens, SSM values | **Never** | — |
 | Diffs with secret findings | **Never** | ADR-0004 |
+| Lines the scanner flagged but a suppression waved through (FR-019) | **Never** | Each is replaced by the stub `+[line withheld: suppressed secret finding]` before the diff is bundled, so line numbers and hunks stay intact and the rest of the diff is still reviewed. For a suppressed private-key header, the key lines after it are withheld up to the `END` line (ADR-0008) |
 
 **Provider terms.** Data-use terms differ between Gemini's unpaid and paid tiers. Under Google's published terms, content sent to unpaid services may be used to improve Google's products and may be seen by human reviewers. Before using MergeGuard on proprietary or third-party code, the owner must:
 
@@ -134,6 +135,8 @@ The brief defaulted a missing `risk_level` to `MEDIUM`, which would request chan
 | Thinking / reasoning budget | Evaluate (model-dependent) | Trade quality against latency; must fit the Lambda time budget |
 | `maxOutputTokens` | Set during evaluation, with headroom for any thinking tokens | Avoid truncated JSON |
 | Diff budget | `MERGEGUARD_MAX_DIFF_CHARS = 12000` (brief) | Roughly 3–4k input tokens; cost and latency control |
+
+The withheld-line stub (§3) is ordinary diff text inside the data block; it changes neither the system instruction nor the prompt template, so it does not change `PROMPT_VERSION`. The worker (Phase 2) derives the Gemini timeout from its own remaining time exactly as the inline handler does; the longer worker timeout only lifts the old API Gateway limit.
 
 M3 sets `temperature`, `responseMimeType` and `responseSchema`. The thinking budget and `maxOutputTokens` stay at the API defaults until the evaluation (T-304) can tune them.
 

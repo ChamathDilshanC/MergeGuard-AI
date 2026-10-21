@@ -17,10 +17,10 @@
 | M2 — Core pipeline (no AI) | 1 | Signed webhook → files → secret gate → review | M1 |
 | M3 — AI review | 1 | Gemini review with validation and fail-open | M2 |
 | M4 — Infrastructure and demo | 1 | Terraform, sandbox deployment, E2E pass (MVP exit) | M2, M3 |
-| M5 — Reliability and signal | 2 | Async processing, commit status, stale-review dismissal | M4 |
+| M5 — Reliability and signal | 2 | Async processing, commit status, stale-review dismissal, suppressions, CI deploy, alarms | M4 |
 | M6 — Distribution | 3 | GitHub App, inline comments, per-repository config | M5 |
 
-**Recommended next step:** M1, then M2. M2 delivers the deterministic security gate before any AI integration, so the riskiest guarantees (signature verification, secret detection, no-AI-on-secrets, log redaction) are proven first.
+**Recommended next step:** T-402 and T-403 (the first real deployment and the end-to-end run), after the open questions listed in the M4 and M5 notes are answered. M1 to M3 proved the riskiest guarantees (signature verification, secret detection, no-AI-on-secrets, log redaction) with tests; M4 and M5 are written but untested against AWS.
 
 ## M0 — Documentation baseline
 
@@ -87,7 +87,7 @@
 
 | ID | Task | Requirements | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- |
-| T-401 | Terraform resources: scoped IAM, Lambda (`source_dir`), log group with retention, HTTP API, throttling, output | FR-012, RB-17 | T-103 | `validate` + checkov pass; IAM matches [SECURITY.md](SECURITY.md) §5.3 | In review (all local checks pass; checkov first runs in CI) |
+| T-401 | Terraform resources: scoped IAM, Lambda (`source_dir`), log group with retention, HTTP API, throttling, output | FR-012, RB-17 | T-103 | `validate` + checkov pass; IAM matches [SECURITY.md](SECURITY.md) §5.3 | Done (merged in PR #4; CI green on `9526b9a`: checkov, `terraform test`, validate). Extended in M5 (T-501, T-506) |
 | T-402 | Deploy to sandbox using [DEPLOYMENT.md](DEPLOYMENT.md) exactly; fix doc gaps found | SM-6 | T-401, M2, M3 | Fresh deploy completes within SM-6 target; doc updated | Not started |
 | T-403 | Run E2E-1 to E2E-9 | PRD §8 | T-402 | All pass; results recorded in the release PR | Not started |
 | T-404 | Update doc statuses from Planned/Proposed to Verified where implemented | — | T-403 | Docs match shipped behaviour | Not started |
@@ -97,7 +97,7 @@
 - **Written, not applied.** The Terraform stack exists; no AWS credentials were used and nothing was deployed. T-402 and T-403 need a real AWS account.
 - **Credential-free plan.** `terraform -chdir=terraform test` plans with a mocked AWS provider: 13 resources to add, and 4 runs asserting the SECURITY.md §5.3 policy, throttling, route, retention and SSM placeholders. It now runs in CI.
 - **SSM placeholders (ADR-0007).** Values are written with the write-only `value_wo`, so they never enter state, and the Lambda treats the placeholder as not set. Before the real Gemini key is stored, no diff can reach Gemini. Terraform must be 1.11 or later.
-- **checkov.** It could not be installed on the development machine (PyPI and Docker Hub unreachable), so the expected findings were derived from checkov 3.3.26's own source. 11 check IDs are skipped inline, with reasons ([SECURITY.md](SECURITY.md) §5.9); access logging was fixed instead. The first real checkov result comes from CI on the M4 PR.
+- **checkov.** It could not be installed on the development machine at the time, so the expected findings were derived from checkov 3.3.26's own source. 11 check IDs are skipped inline, with reasons ([SECURITY.md](SECURITY.md) §5.9); access logging was fixed instead. CI then ran checkov for the first time: one false positive (its secrets scan flagged a Terraform local named like a credential) was fixed by renaming the local, and the next run was green.
 - **Tighter than the brief:** the Lambda permission allows only `POST /webhook`, and API Gateway writes access logs to a second log group.
 - **Open questions to settle before T-402:** OQ-05 (Gemini tier; keep the Gemini key as the placeholder until then), OQ-06 (bot identity), OQ-08 (state backend; local state for now), OQ-10 (region). OQ-07 (AWS provider major) is unchanged. None is settled here.
 
@@ -105,12 +105,26 @@
 
 | ID | Task | Requirements | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- |
-| T-501 | Receiver/worker split with SQS and DLQ | FR-016, ADR-0005, RB-05 | p95 acknowledgement < 2 s; DLQ alarm; duplicates absorbed | Not started |
-| T-502 | Commit status `mergeguard/review` | FR-017 | States per [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) §5.6; usable as a required check | Not started |
-| T-503 | Dismiss stale MergeGuard `REQUEST_CHANGES` reviews | FR-018, RB-11 | Fixing a flagged PR leaves no active blocking MergeGuard review | Not started |
-| T-504 | Scanner suppressions, including the `N-SUPPRESSED` notice | FR-019 | Inline marker and path allow-list tested; suppressions listed in the review | Not started |
-| T-505 | Remote Terraform state and OIDC-based deploy workflow | [DEPLOYMENT.md](DEPLOYMENT.md) §8 | Deploy from CI with approval; no static AWS keys in GitHub | Not started |
-| T-506 | Alarms and AWS Budgets alert | NFR-007, TM-08 | Alarms fire in a test; budget alert configured | Not started |
+| T-501 | Receiver/worker split with SQS and DLQ | FR-016, ADR-0005, RB-05 | p95 acknowledgement < 2 s; DLQ alarm; duplicates absorbed | In review (code, Terraform and tests pass; duplicates absorbed and the DLQ alarm defined. **p95 acknowledgement is not measured**: it needs a deployment, T-403) |
+| T-502 | Commit status `mergeguard/review` | FR-017 | States per [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) §5.6; usable as a required check | In review (states and texts tested; **"usable as a required check" is not confirmed**, it needs a real repository, T-403) |
+| T-503 | Dismiss stale MergeGuard `REQUEST_CHANGES` reviews | FR-018, RB-11 | Fixing a flagged PR leaves no active blocking MergeGuard review | In review (tested with a fake GitHub; **GitHub's behaviour on protected branches is not confirmed**, T-403) |
+| T-504 | Scanner suppressions, including the `N-SUPPRESSED` notice | FR-019 | Inline marker and path allow-list tested; suppressions listed in the review | In review (all acceptance criteria met by tests; see [ADR-0008](ADR/0008-scanner-suppressions-are-visible-and-withheld-from-ai.md)) |
+| T-505 | Remote Terraform state and OIDC-based deploy workflow | [DEPLOYMENT.md](DEPLOYMENT.md) §8 | Deploy from CI with approval; no static AWS keys in GitHub | In review (workflow and bootstrap stack written and statically checked; **the workflow and the bootstrap stack have never run**, and the deploy role's permissions are unconfirmed until T-402) |
+| T-506 | Alarms and AWS Budgets alert | NFR-007, TM-08 | Alarms fire in a test; budget alert configured | In review (alarms and budget defined and plan-tested; **an alarm has never fired**, and no budget exists until the owner sets `monthly_budget_usd`) |
+
+**M5 notes:**
+
+- **What is verified.** 553 unit and integration tests pass with fakes for GitHub, SSM and SQS and a mocked Gemini (no real call, OQ-05). `terraform test` covers the stack (12 plan runs) and the bootstrap stack (7 runs) with a mocked AWS provider. No AWS credentials were used, nothing was applied, and the deploy workflow was not run.
+- **checkov** ran in CI on PR #5: 78 passed, 0 failed, 33 skipped, with the skips and reasons in [SECURITY.md](SECURITY.md) §5.9. It first reported a parsing error for `terraform/variables.tf` (it would have skipped the file silently); that was fixed and CI now fails on any parsing error.
+- **What is not verified.** Anything that needs a deployment: acknowledgement latency, alarms firing, SQS retry and redrive behaviour, event source mapping behaviour, GitHub's handling of commit statuses and dismissals, the deploy role's permissions, and the OIDC trust. These move to T-402 and T-403 ([TESTING_STRATEGY.md](TESTING_STRATEGY.md) E2E-10 to E2E-13).
+- **One code package, two handlers.** `lambda_function.lambda_handler` is the receiver and `worker_function.lambda_handler` the worker, with separate IAM roles: the receiver reads only the webhook secret, the worker only the token and the Gemini key. With `MERGEGUARD_QUEUE_URL` unset the handler still reviews inline, which the tests and local runs use; the Terraform stack always sets it.
+- **Failure model.** The worker reports a failed record instead of crashing, so SQS retries it three times and then dead-letters it. That is why the alarms watch the dead-letter queue and API Gateway `5xx`: Lambda `Errors` would stay at zero for those failures.
+- **Signals never stop a review.** A permanent failure to set a commit status or dismiss a review (missing permission, protected branch) is logged and the review stands. A transient one is retried, and a retry that finds its own review restores the final status and the dismissals from it.
+- **Suppressions** are listed in every review and withheld from the AI (ADR-0008). The allow-list is operator-only. A real credential marked with the inline marker is not blocked; that residual risk is TM-15.
+- **Remote state is opt-in** (ADR-0009): CI selects the S3 backend through a generated override file, and local state stays the default. **OQ-08 is not settled.** The deploy workflow is manual only; no push trigger is enabled.
+- **Known limits.** A new head with no reviewable patch posts no review and dismisses nothing. After an *AI review unavailable* comment, an earlier AI-based block is kept and only earlier secret blocks are dismissed (owner's decision; it departs from FR-018's literal wording). The status is still `success`, because nothing blocks the new commit. The plan job holds a role that can also apply (TM-16). The first real deploy will probably need adjustments to the deploy role.
+- **Doc-only decisions to confirm.** ADR-0005 changed from Proposed to Accepted because M5 implements it. ADR-0008 and ADR-0009 are new. FR-016 to FR-019 changed from Proposed to Verified in code and tests.
+- **Open questions to settle before T-402** (none is settled here): OQ-05 (Gemini tier, and the monthly budget amount; keep the Gemini key as the placeholder until then), OQ-06 (bot identity: statuses and dismissals also depend on whose token it is), OQ-08 (local or remote state), OQ-10 (region). OQ-07 (AWS provider major) is unchanged. The owner also has to choose `alert_email` and `monthly_budget_usd`.
 
 ## M6 — Distribution (Phase 3)
 

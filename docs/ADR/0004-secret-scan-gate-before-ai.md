@@ -17,7 +17,7 @@ The brief scans the diff with regular expressions **before** calling Gemini. If 
    - fix and extend the rule set (RB-02; PRD FR-005);
    - mask values in output;
    - give each rule a stable ID;
-   - support suppressions in Phase 2 (FR-019).
+   - support suppressions in Phase 2 (FR-019), under the rules of [ADR-0008](0008-scanner-suppressions-are-visible-and-withheld-from-ai.md): every suppression is listed in the review, and suppressed lines never reach the AI.
 
 ## Alternatives considered
 

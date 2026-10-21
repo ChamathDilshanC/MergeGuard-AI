@@ -7,6 +7,7 @@ as the suffix of the ``github.*`` log events.
 import json
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
@@ -22,6 +23,17 @@ PER_PAGE = 100
 MAX_REVIEW_PAGES = 10
 # Defence in depth: the client itself refuses APPROVE (PRD section 6.2).
 ALLOWED_REVIEW_EVENTS = frozenset({"COMMENT", "REQUEST_CHANGES"})
+STATUS_CONTEXT = "mergeguard/review"  # FR-017; branch protection matches this name
+STATUS_STATES = frozenset({"pending", "success", "failure", "error"})
+MAX_STATUS_DESCRIPTION = 140  # GitHub's limit
+
+
+@dataclass(frozen=True, slots=True)
+class PullState:
+    """What the worker re-checks before spending an AI call or posting."""
+
+    head_sha: str
+    state: str  # "open" or "closed"
 
 
 class GitHubError(Exception):
@@ -119,6 +131,41 @@ class GitHubClient:
             raise ValueError(f"review event {event!r} is not allowed")
         payload = {"commit_id": commit_id, "event": event, "body": body}
         self._request("POST", f"{self._pull_url(repo, number)}/reviews", payload)
+
+    def pull_state(self, repo: str, number: int) -> PullState:
+        """Current head SHA and open/closed state of the pull request."""
+        data = _json(self._request("GET", self._pull_url(repo, number)))
+        head = data.get("head") if isinstance(data, dict) else None
+        sha = head.get("sha") if isinstance(head, dict) else None
+        state = data.get("state") if isinstance(data, dict) else None
+        if not isinstance(sha, str) or not isinstance(state, str):
+            raise GitHubError("unexpected", 200)
+        return PullState(sha, state)
+
+    def create_status(
+        self, repo: str, sha: str, *, state: str, description: str
+    ) -> None:
+        """Set the ``mergeguard/review`` commit status (FR-017)."""
+        if state not in STATUS_STATES:
+            raise ValueError(f"commit status state {state!r} is not allowed")
+        owner, name = repo.split("/")
+        url = (
+            f"{self._api_url}/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
+            f"/statuses/{quote(sha, safe='')}"
+        )
+        payload = {
+            "state": state,
+            "context": STATUS_CONTEXT,
+            "description": description[:MAX_STATUS_DESCRIPTION],
+        }
+        self._request("POST", url, payload)
+
+    def dismiss_review(
+        self, repo: str, number: int, review_id: int, message: str
+    ) -> None:
+        """Dismiss a review, with a message that explains why (FR-018)."""
+        url = f"{self._pull_url(repo, number)}/reviews/{int(review_id)}/dismissals"
+        self._request("PUT", url, {"message": message, "event": "DISMISS"})
 
     def _pull_url(self, repo: str, number: int) -> str:
         owner, name = repo.split("/")

@@ -2,13 +2,19 @@
 
 import pytest
 
-from mergeguard.models import AIReview, SecretFinding
+from mergeguard.models import AIReview, SecretFinding, SuppressedFinding
 from mergeguard.policy import Decision, ReviewEvent, Template
 from mergeguard.render import (
     FALLBACK_CALLOUT,
     MARKER_PREFIX,
     MAX_BODY_CHARS,
+    STATUS_BLOCKED_AI,
+    STATUS_BLOCKED_SECRETS,
+    STATUS_CLEAR,
+    STATUS_ERROR,
+    STATUS_PENDING,
     Notices,
+    dismissal_message,
     render_ai_review,
     render_ai_unavailable,
     render_review,
@@ -194,3 +200,80 @@ def test_summary_is_flattened_and_capped():
         line for line in body.splitlines() if line.startswith("**Summary:**")
     )
     assert len(summary_line) <= len("**Summary:** ") + 500
+
+
+# --- N-SUPPRESSED (FR-019) and commit status texts -----------------------------
+
+N_SUPPRESSED = """\
+> [!NOTE]
+> 2 finding(s) suppressed by `mergeguard:ignore-secret` or path allow-list. These lines were not sent to the AI.
+> - AWS access key ID: `a.py` line 3 (inline marker)
+> - GitHub token: `tests/fixtures/k.json` line 9 (path allow-list)"""
+
+
+def suppressed(count: int = 2) -> tuple:
+    items = [
+        SuppressedFinding("aws-access-key-id", "a.py", 3, "inline"),
+        SuppressedFinding("github-token", "tests/fixtures/k.json", 9, "path"),
+    ]
+    return tuple(items[:count])
+
+
+def test_suppressed_notice_snapshot_lists_every_suppression():
+    body = render_ai_unavailable(
+        "timeout", SHA, notices=Notices(suppressed=suppressed())
+    )
+    assert N_SUPPRESSED in body
+    assert body.index(N_SUPPRESSED) < body.index("<sub>")  # inside the review
+
+
+@pytest.mark.parametrize("template", ["security", "ai"])
+def test_suppressed_notice_appears_in_security_and_ai_reviews(template):
+    notices = Notices(suppressed=suppressed())
+    if template == "security":
+        body = render_security(
+            [SecretFinding("github-token", "x.py", 1)], SHA, notices=notices
+        )
+    else:
+        body = render_ai_review(ai_review(), SHA, notices=notices)
+    assert N_SUPPRESSED in body
+
+
+def test_suppressed_notice_caps_the_list():
+    items = tuple(
+        SuppressedFinding("github-token", f"f{i}.py", i, "path") for i in range(30)
+    )
+    body = render_ai_unavailable("timeout", SHA, notices=Notices(suppressed=items))
+    assert "> 30 finding(s) suppressed" in body
+    assert body.count("\n> - GitHub token:") == 25
+    assert "> - …and 5 more." in body
+
+
+def test_no_suppressions_no_notice():
+    assert "suppressed" not in render_ai_unavailable("timeout", SHA, notices=NO_NOTICES)
+
+
+def test_dismissal_message_names_the_new_commit():
+    assert "commit 0123456" in dismissal_message(SHA)
+
+
+def test_commit_status_texts_match_the_design_system():
+    assert STATUS_PENDING == ("pending", "MergeGuard review in progress")
+    assert STATUS_BLOCKED_SECRETS == (
+        "failure",
+        "Possible credentials found — see review",
+    )
+    assert STATUS_BLOCKED_AI == (
+        "failure",
+        "Changes requested by AI review — see review",
+    )
+    assert STATUS_CLEAR == ("success", "No blocking issues found")
+    assert STATUS_ERROR == ("error", "MergeGuard could not complete the review")
+    for _, description in (
+        STATUS_PENDING,
+        STATUS_BLOCKED_SECRETS,
+        STATUS_BLOCKED_AI,
+        STATUS_CLEAR,
+        STATUS_ERROR,
+    ):
+        assert len(description) <= 140

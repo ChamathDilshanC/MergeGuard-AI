@@ -10,6 +10,11 @@ tfplan
 crash.log
 crash.*.log
 
+# Override files: CI writes backend_override.tf at run time to select the S3
+# backend (.github/workflows/deploy.yml). It is never committed.
+*_override.tf
+override.tf
+
 # Build artifacts (Terraform writes the Lambda zip)
 *.zip
 

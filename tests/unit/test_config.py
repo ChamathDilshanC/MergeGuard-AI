@@ -181,3 +181,99 @@ def test_secret_values_are_not_in_repr():
     secrets = SecretStore("/mergeguard", FakeSsm).get()
     assert TEST_GITHUB_TOKEN not in repr(secrets)
     assert TEST_WEBHOOK_SECRET not in repr(secrets)
+
+
+# --- Phase 2 settings and per-secret accessors (M5) -----------------------------
+
+QUEUE = "https://sqs.us-east-1.amazonaws.com/123456789012/mergeguard-review-requests"
+
+
+def test_phase_2_settings_default_to_phase_1_behaviour():
+    settings = Settings.from_env({})
+    assert settings.queue_url is None  # synchronous, as in Phase 1
+    assert settings.commit_status is False
+    assert settings.scan_allow_paths == ()
+
+
+def test_phase_2_settings_overrides():
+    settings = Settings.from_env(
+        {
+            "MERGEGUARD_QUEUE_URL": QUEUE,
+            "MERGEGUARD_COMMIT_STATUS": "true",
+            "MERGEGUARD_SCAN_ALLOW_PATHS": " tests/fixtures/** , **/*.pem ,, ",
+        }
+    )
+    assert settings.queue_url == QUEUE
+    assert settings.commit_status is True
+    assert settings.scan_allow_paths == ("tests/fixtures/**", "**/*.pem")
+
+
+def test_an_empty_queue_url_means_synchronous():
+    assert Settings.from_env({"MERGEGUARD_QUEUE_URL": " "}).queue_url is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://sqs.us-east-1.amazonaws.com/123456789012/q",
+        "https://evil.example.com/123456789012/q",
+        "https://sqs.us-east-1.amazonaws.com.evil.example/123456789012/q",
+        "https://sqs.us-east-1.amazonaws.com/123/q",
+        "https://sqs.us-east-1.amazonaws.com/123456789012/q/../x",
+        "mergeguard-review-requests",
+    ],
+)
+def test_queue_url_must_be_an_sqs_url(value):
+    with pytest.raises(ConfigError, match="MERGEGUARD_QUEUE_URL"):
+        Settings.from_env({"MERGEGUARD_QUEUE_URL": value})
+
+
+def test_commit_status_must_be_a_boolean():
+    with pytest.raises(ConfigError):
+        Settings.from_env({"MERGEGUARD_COMMIT_STATUS": "maybe"})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "/etc/**",  # absolute
+        "../outside/**",
+        "a/../b",
+        "**",  # would switch the gate off
+        "*",
+        "**/*",
+        "a\tb",
+        "a" * 201,
+        "tests/fixtures/**,**",  # one bad entry rejects the whole list
+    ],
+)
+def test_invalid_allow_paths_fail_closed(value):
+    with pytest.raises(ConfigError, match="MERGEGUARD_SCAN_ALLOW_PATHS"):
+        Settings.from_env({"MERGEGUARD_SCAN_ALLOW_PATHS": value})
+
+
+def test_too_many_allow_paths_fail_closed():
+    value = ",".join(f"dir{i}/**" for i in range(51))
+    with pytest.raises(ConfigError, match="at most 50"):
+        Settings.from_env({"MERGEGUARD_SCAN_ALLOW_PATHS": value})
+
+
+def test_each_secret_can_be_read_alone():
+    """The receiver may read only the webhook secret, the worker only the token
+    and the Gemini key (least privilege, SECURITY.md section 5.3)."""
+    ssm = FakeSsm()
+    store = SecretStore("/mergeguard", lambda: ssm)
+    assert store.webhook_secret() == TEST_WEBHOOK_SECRET
+    assert store.github_token() == TEST_GITHUB_TOKEN
+    assert [call["Names"] for call in ssm.calls] == [
+        ["/mergeguard/webhook_secret"],
+        ["/mergeguard/github_token"],
+    ]
+
+
+def test_receiver_does_not_need_the_token_to_exist():
+    ssm = FakeSsm({"/mergeguard/webhook_secret": TEST_WEBHOOK_SECRET})
+    store = SecretStore("/mergeguard", lambda: ssm)
+    assert store.webhook_secret() == TEST_WEBHOOK_SECRET
+    with pytest.raises(ConfigError):
+        store.github_token()
