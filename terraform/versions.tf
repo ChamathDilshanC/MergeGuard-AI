@@ -1,6 +1,7 @@
 terraform {
-  # CI pins the exact CLI version (.github/workflows/ci.yml).
-  required_version = ">= 1.5, < 2.0"
+  # CI pins the exact CLI version (.github/workflows/ci.yml). 1.11 is the first
+  # release with write-only arguments, which keep secrets out of state (ADR-0007).
+  required_version = ">= 1.11, < 2.0"
 
   required_providers {
     # Constraint from the project brief. Whether to move to the current major
@@ -9,7 +10,7 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
-    # Packages src/ into the Lambda zip from T-401 onward.
+    # Packages src/ into the Lambda zip (main.tf).
     archive = {
       source  = "hashicorp/archive"
       version = "~> 2.4"

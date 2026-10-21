@@ -87,10 +87,19 @@
 
 | ID | Task | Requirements | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- |
-| T-401 | Terraform resources: scoped IAM, Lambda (`source_dir`), log group with retention, HTTP API, throttling, output | FR-012, RB-17 | T-103 | `validate` + checkov pass; IAM matches [SECURITY.md](SECURITY.md) §5.3 | Not started |
+| T-401 | Terraform resources: scoped IAM, Lambda (`source_dir`), log group with retention, HTTP API, throttling, output | FR-012, RB-17 | T-103 | `validate` + checkov pass; IAM matches [SECURITY.md](SECURITY.md) §5.3 | In review (all local checks pass; checkov first runs in CI) |
 | T-402 | Deploy to sandbox using [DEPLOYMENT.md](DEPLOYMENT.md) exactly; fix doc gaps found | SM-6 | T-401, M2, M3 | Fresh deploy completes within SM-6 target; doc updated | Not started |
 | T-403 | Run E2E-1 to E2E-9 | PRD §8 | T-402 | All pass; results recorded in the release PR | Not started |
 | T-404 | Update doc statuses from Planned/Proposed to Verified where implemented | — | T-403 | Docs match shipped behaviour | Not started |
+
+**M4 notes (T-401):**
+
+- **Written, not applied.** The Terraform stack exists; no AWS credentials were used and nothing was deployed. T-402 and T-403 need a real AWS account.
+- **Credential-free plan.** `terraform -chdir=terraform test` plans with a mocked AWS provider: 13 resources to add, and 4 runs asserting the SECURITY.md §5.3 policy, throttling, route, retention and SSM placeholders. It now runs in CI.
+- **SSM placeholders (ADR-0007).** Values are written with the write-only `value_wo`, so they never enter state, and the Lambda treats the placeholder as not set. Before the real Gemini key is stored, no diff can reach Gemini. Terraform must be 1.11 or later.
+- **checkov.** It could not be installed on the development machine (PyPI and Docker Hub unreachable), so the expected findings were derived from checkov 3.3.26's own source. 11 check IDs are skipped inline, with reasons ([SECURITY.md](SECURITY.md) §5.9); access logging was fixed instead. The first real checkov result comes from CI on the M4 PR.
+- **Tighter than the brief:** the Lambda permission allows only `POST /webhook`, and API Gateway writes access logs to a second log group.
+- **Open questions to settle before T-402:** OQ-05 (Gemini tier; keep the Gemini key as the placeholder until then), OQ-06 (bot identity), OQ-08 (state backend; local state for now), OQ-10 (region). OQ-07 (AWS provider major) is unchanged. None is settled here.
 
 ## M5 — Reliability and signal (Phase 2)
 

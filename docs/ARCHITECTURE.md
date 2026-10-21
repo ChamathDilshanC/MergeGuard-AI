@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — M1 to M3 implemented (pipeline with Gemini review, mocked in tests); **not deployed** |
+| Status | Draft v0.1 — M1 to M3 implemented; M4 Terraform written and plan-tested; **not deployed** |
 | Last updated | 2026-10-21 |
 | Owner | [@ChamathDilshanC](https://github.com/ChamathDilshanC) |
 | Related | [PRD](PRD.md) · [API spec](API_SPEC.md) · [Security](SECURITY.md) · [Deployment](DEPLOYMENT.md) · [ADRs](ADR/README.md) |
@@ -16,7 +16,8 @@ This document describes how MergeGuard AI is built. It covers the **Phase 1 (MVP
 - **M1** added the project skeleton, dev tooling, a Terraform skeleton without resources, and a CI workflow (§4.1).
 - **M2** added the webhook pipeline without AI: signature check, event triage, secret scan, decision policy, review posting with the own-PR fallback, duplicate prevention, dry run and structured logging. It is covered by unit, contract and integration tests.
 - **M3** added the Gemini review after a clean scan: the versioned prompt, diff budget, strict output validation, prompt-injection defences and fail-safe fallbacks. It is tested with mocked Gemini responses only.
-- **Not yet built:** Terraform resources (T-401) and the AI evaluation (T-304, blocked on OQ-05). Nothing is deployed. Component names below come from the brief (Planned) or are recommendations (Proposed).
+- **M4** added the Terraform stack (T-401): IAM, Lambda, HTTP API, log groups and SSM placeholders. It is checked by a mocked-provider plan test and has never been applied.
+- **Not yet built:** the AI evaluation (T-304, blocked on OQ-05) and any deployment (T-402). Component names below come from the brief (Planned) or are recommendations (Proposed).
 
 ## 2. System context
 
@@ -46,7 +47,7 @@ flowchart LR
 | Logs | Amazon CloudWatch Logs, `/aws/lambda/mergeguard-ai-pr-reviewer` | Planned (brief), retention Proposed |
 | AI | Google Gemini `generateContent`, model `gemini-2.5-flash` (configurable) | Planned (brief) |
 | Source control integration | GitHub webhooks + REST API, fine-grained PAT | Planned (brief) |
-| Infrastructure as code | Terraform `>= 1.5, < 2.0`; providers `hashicorp/aws` (`~> 5.0` in brief, locked at 5.100.0) and `hashicorp/archive` (`~> 2.4`, locked at 2.8.1) | Skeleton Verified (M1); resources Planned (T-401); AWS major version [OQ-07](PRD.md#17-open-questions) |
+| Infrastructure as code | Terraform `>= 1.11, < 2.0`; providers `hashicorp/aws` (`~> 5.0` in brief, locked at 5.100.0) and `hashicorp/archive` (`~> 2.4`, locked at 2.8.1) | Stack Verified by validate and mocked plan tests (M4); never applied; AWS major version [OQ-07](PRD.md#17-open-questions) |
 | Async processing | Amazon SQS standard queue + dead-letter queue | Proposed (Phase 2), [ADR-0005](ADR/0005-async-webhook-processing.md) |
 | Dev tooling | `pytest` 9.1.1, `pytest-cov` 7.1.0, `ruff` 0.16.10 (`requirements-dev.txt`); Terraform 1.16.5 and `checkov` 3.3.26 pinned in CI (dev-only) | Verified (M1; checkov in CI only) |
 | CI/CD | GitHub Actions `ci.yml` (lint, tests, Terraform checks); deploy with AWS access via OIDC role (no static keys) | CI Verified (green on PRs #1 and #2 and on `main`); deploy Proposed (Phase 2) |
@@ -72,8 +73,11 @@ flowchart LR
 │   └── mergeguard/            # Phase 1 modules (M2-M3), incl. ai_reviewer and prompts
 ├── terraform/
 │   ├── .terraform.lock.hcl
+│   ├── main.tf                # IAM, SSM placeholders, Lambda, log groups, HTTP API
+│   ├── outputs.tf             # github_webhook_url and resource names
 │   ├── providers.tf
-│   ├── variables.tf           # Variables from DEPLOYMENT.md section 4; no resources yet
+│   ├── tests/plan.tftest.hcl  # Credential-free plan tests (mocked AWS provider)
+│   ├── variables.tf           # Variables from DEPLOYMENT.md section 4
 │   └── versions.tf
 └── tests/
     ├── fixtures/              # Sanitised webhook payloads and recorded Gemini responses
@@ -207,7 +211,7 @@ Details and the threat model are in [SECURITY.md](SECURITY.md).
 - **Authentication of GitHub → MergeGuard:** HMAC-SHA256 over the raw body, verified with `hmac.compare_digest`.
 - **Authentication of MergeGuard → GitHub:** fine-grained PAT scoped to the selected repositories. Permissions: *Pull requests: read and write*, *Contents: read* (brief), and *Commit statuses: read and write* from Phase 2.
 - **Authorisation inside AWS:** one execution role. Its inline policy allows `logs:CreateLogStream` and `logs:PutLogEvents` on the function's own log group, plus `ssm:GetParameter` / `ssm:GetParameters` on `arn:aws:ssm:<region>:<account>:parameter/mergeguard/*`. The brief used `*` for region and account; Terraform should build these ARNs from `aws_region` and `aws_caller_identity` data sources. Explicit `kms:Decrypt` is only needed if a customer-managed KMS key replaces `aws/ssm`.
-- **Secrets boundary:** secret values exist only in SSM and Lambda memory. They are created outside Terraform, so they never reach Terraform state.
+- **Secrets boundary:** secret values exist only in SSM and Lambda memory. Terraform creates the parameters with write-only placeholders, so real values never reach Terraform state ([ADR-0007](ADR/0007-ssm-placeholders-with-write-only-values.md)).
 - **Data egress:** code leaves AWS only towards Gemini, and only after a clean secret scan ([ADR-0004](ADR/0004-secret-scan-gate-before-ai.md)).
 
 ## 10. Configuration strategy
@@ -263,7 +267,7 @@ Summary only; see [TESTING_STRATEGY.md](TESTING_STRATEGY.md).
 
 ## 14. Deployment topology
 
-Phase 1: one AWS account and region (default `us-east-1`), one Lambda, one HTTP API. Each target repository has a webhook pointing at the same URL with the same secret. Terraform runs from the maintainer's machine, with local state unless OQ-08 decides otherwise. Step-by-step instructions are in [DEPLOYMENT.md](DEPLOYMENT.md).
+Phase 1: one AWS account and region (default `us-east-1`), one Lambda, one HTTP API. Each target repository has a webhook pointing at the same URL with the same secret. Terraform runs from the maintainer's machine, with local state unless OQ-08 decides otherwise. It also creates the three SSM parameters as placeholders and an API Gateway access log group. Step-by-step instructions are in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## 15. Target architecture (Phase 2 and 3)
 
@@ -338,3 +342,4 @@ The brief's reference Python and Terraform code was reviewed before any implemen
 | [0004](ADR/0004-secret-scan-gate-before-ai.md) | Deterministic secret scan gates AI review | Accepted (brief) |
 | [0005](ADR/0005-async-webhook-processing.md) | Asynchronous webhook processing | Proposed |
 | [0006](ADR/0006-github-identity-pat-then-app.md) | GitHub identity: PAT first, then GitHub App | Proposed |
+| [0007](ADR/0007-ssm-placeholders-with-write-only-values.md) | Terraform-managed SSM placeholders with write-only values | Accepted |

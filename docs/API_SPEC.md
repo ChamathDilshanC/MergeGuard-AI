@@ -194,8 +194,8 @@ Content-Type: application/json
 
 | Call | Parameters | Notes |
 | --- | --- | --- |
-| `GetParameters` (core) | `Names = [<prefix>/github_token, <prefix>/webhook_secret]`, `WithDecryption = true` | One call per cold start or 15-minute TTL expiry. Any entry in `InvalidParameters`, or an empty value, means fail closed (`500`) |
-| `GetParameters` (Gemini key) | `Names = [<prefix>/gemini_api_key]`, `WithDecryption = true` | Only when an AI review runs; cached the same way. A missing or empty key gives the AI-unavailable comment with reason `not_configured`, not a `500` |
+| `GetParameters` (core) | `Names = [<prefix>/github_token, <prefix>/webhook_secret]`, `WithDecryption = true` | One call per cold start or 15-minute TTL expiry. Any entry in `InvalidParameters`, an empty value, or the Terraform placeholder (ADR-0007) means fail closed (`500`) |
+| `GetParameters` (Gemini key) | `Names = [<prefix>/gemini_api_key]`, `WithDecryption = true` | Only when an AI review runs; cached the same way. A missing, empty or placeholder key gives the AI-unavailable comment with reason `not_configured`, not a `500`, and no diff is sent |
 
 ## 6. Internal — queue message (Phase 2)
 

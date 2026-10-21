@@ -66,6 +66,7 @@ The suite enforces **0%** flagged negatives, stricter than the SM-3 gate.
 | --- | --- | --- |
 | Formatting | `terraform -chdir=terraform fmt -check -recursive` | Must pass |
 | Validation | `terraform -chdir=terraform init -backend=false` then `terraform -chdir=terraform validate` | Must pass |
+| Plan tests | `terraform -chdir=terraform test` (AWS provider mocked; no credentials) | Must pass; asserts the SECURITY.md §5.3 IAM policy, throttling, route, retention and SSM placeholders |
 | Policy scan | `checkov -d terraform` | No unresolved high-severity findings; accepted findings documented inline with a reason |
 | Plan review | `terraform -chdir=terraform plan` against the sandbox account | Manual review before every apply |
 
@@ -116,7 +117,7 @@ Record the outcome (pass/fail, delivery IDs, date) in the release PR description
 | FR-009 | Snapshot tests, ST-07 | — | — | E2E-2 to E2E-5 |
 | FR-010 | ST-09 policy table | `422` fallback | ✓ | E2E-2 |
 | FR-011 | Config loader | — | ✓ | All |
-| FR-012 | — | — | — | §5 checks |
+| FR-012 | `terraform test` plan assertions; `test_infra_contract.py` | — | — | §5 checks |
 | FR-013 | — | — | ST-06 | E2E-9 |
 | FR-014 | Marker matching | Existing reviews | ✓ | E2E-6 |
 | FR-015 | — | — | Dry-run test | — |
@@ -140,6 +141,6 @@ A PR can merge only when all of these hold:
 | Run tests | `python -m pytest` | Verified (M1) |
 | Coverage | `python -m pytest --cov=src --cov-report=term-missing` | Verified (M1); fails below 85% |
 | Lint / format check | `ruff check .` and `ruff format --check .` | Verified (M1) |
-| Terraform checks | See §5 | `fmt` and `validate` Verified (M1); `checkov` Verified in CI (not run locally); plan review starts in T-401 |
+| Terraform checks | See §5 | `fmt`, `validate` and `terraform test` Verified (M4); `checkov` runs in CI only (not installable locally); real plan review starts with T-402 |
 
 Quality gates 1–5 in §9 are automated in `.github/workflows/ci.yml`. Gate 5 is the import check in `tests/unit/test_runtime_dependencies.py`. Gate 6 (docs updated) is a review item.

@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — **procedure not yet executed**; only the Terraform skeleton exists (T-103); resources and code come in T-401 and M2–M3 |
+| Status | Draft v0.1 — **procedure not yet executed**. The code (M2–M3) and the Terraform stack (T-401) exist and are tested without AWS; the first real deploy is T-402 |
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) §14 · [Security](SECURITY.md) §6 · [Testing](TESTING_STRATEGY.md) §7 |
 
@@ -23,18 +23,25 @@ In Phase 1 the sandbox stack may also serve the maintainer's real repositories, 
 | --- | --- |
 | AWS account and IAM principal | Permissions to manage IAM roles and policies, Lambda, API Gateway v2, CloudWatch Logs, and SSM parameters. Check with `aws sts get-caller-identity` |
 | AWS CLI | v2 recommended. Credentials configured for the target account |
-| Terraform | `>= 1.5, < 2.0` (`terraform/versions.tf`). CI uses 1.16.5 |
+| Terraform | `>= 1.11, < 2.0` (`terraform/versions.tf`); 1.11 adds the write-only arguments that keep secrets out of state (ADR-0007). CI uses 1.16.5 |
 | GitHub | Admin rights on each target repository (to add a webhook) |
 | Google AI Studio account | To create a Gemini API key; tier per [OQ-05](PRD.md#17-open-questions) |
 | Python 3.12 | Only for development and tests |
 
 **Cost note:** at small scale, the design keeps AWS usage within low-cost service tiers. Free-tier eligibility depends on the account's plan and age, so check the AWS Free Tier page for your account. Gemini pricing and quotas are separate.
 
-## 3. One-time setup — create the three secrets
+## 3. Secrets: placeholders, then real values
 
-Secrets must exist **before** the first invocation; the Lambda fails closed without them (FR-011).
+**Order of operations:**
 
-### 3.1 Create the credentials
+1. Prepare the credentials (§3.1).
+2. Deploy (§5). Terraform creates the three SSM parameters with a public placeholder value ([ADR-0007](ADR/0007-ssm-placeholders-with-write-only-values.md)).
+3. Store the real values (§3.2).
+4. Connect the webhook (§6).
+
+Until step 3, the Lambda treats each parameter as not set: every delivery gets `500` (`config.failed`), and nothing leaves AWS.
+
+### 3.1 Prepare the credentials
 
 1. **GitHub fine-grained token.** Go to GitHub → *Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token* and set:
    - **Expiration:** set one (record the date for rotation).
@@ -48,18 +55,18 @@ Secrets must exist **before** the first invocation; the Lambda fails closed with
    python -c "import secrets; print(secrets.token_hex(32))"
    ```
 
-### 3.2 Store them in SSM Parameter Store
+### 3.2 Store the real values (after the first apply)
 
-Read each value interactively so it never appears in shell history:
+The parameters already exist, so always use `--overwrite`. Read each value interactively so it never appears in shell history:
 
 ```bash
 REGION=us-east-1
 read -rsp "GitHub token: " V && echo
-aws ssm put-parameter --name "/mergeguard/github_token" --type SecureString --value "$V" --region "$REGION"
+aws ssm put-parameter --name "/mergeguard/github_token" --type SecureString --overwrite --value "$V" --region "$REGION"
 read -rsp "Gemini API key: " V && echo
-aws ssm put-parameter --name "/mergeguard/gemini_api_key" --type SecureString --value "$V" --region "$REGION"
+aws ssm put-parameter --name "/mergeguard/gemini_api_key" --type SecureString --overwrite --value "$V" --region "$REGION"
 read -rsp "Webhook secret: " V && echo
-aws ssm put-parameter --name "/mergeguard/webhook_secret" --type SecureString --value "$V" --region "$REGION"
+aws ssm put-parameter --name "/mergeguard/webhook_secret" --type SecureString --overwrite --value "$V" --region "$REGION"
 unset V
 ```
 
@@ -67,16 +74,24 @@ PowerShell 7.1+:
 
 ```powershell
 $v = Read-Host "GitHub token" -MaskInput
-aws ssm put-parameter --name "/mergeguard/github_token" --type SecureString --value $v --region us-east-1
+aws ssm put-parameter --name "/mergeguard/github_token" --type SecureString --overwrite --value $v --region us-east-1
 # repeat for /mergeguard/gemini_api_key and /mergeguard/webhook_secret
 Remove-Variable v
 ```
 
-To update an existing value, add `--overwrite`. **Never** print values back with `get-parameter --with-decryption` in shared terminals, CI logs, or screen recordings.
+**Never** print values back with `get-parameter --with-decryption` in shared terminals, CI logs, or screen recordings.
+
+**Never run `terraform import` on these parameters.** An import reads the real value into Terraform state and its backups (ADR-0007). Terraform writes only the placeholder and never reads the real value back.
+
+### 3.3 The Gemini key and OQ-05
+
+You can leave `/mergeguard/gemini_api_key` as the placeholder. MergeGuard then still runs the secret scan, posts *AI review unavailable (not_configured)* on clean PRs, and **sends no diff to Gemini**.
+
+Store the real key only after the Gemini tier is decided ([OQ-05](PRD.md#17-open-questions)), because from then on live PR diffs go to Google.
 
 ## 4. Terraform configuration
 
-These variables are declared in `terraform/variables.tf` (T-103), with validation for the limits stated below. They are wired to resources in T-401. Defaults reproduce the brief.
+These variables live in `terraform/variables.tf` and are used by `terraform/main.tf` (T-401), with validation for the limits stated below. Defaults reproduce the brief.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -89,9 +104,10 @@ These variables are declared in `terraform/variables.tf` (T-103), with validatio
 | `gemini_model` | `gemini-2.5-flash` | → `MERGEGUARD_GEMINI_MODEL` |
 | `max_diff_chars` | `12000` | → `MERGEGUARD_MAX_DIFF_CHARS` |
 | `max_files` | `300` | → `MERGEGUARD_MAX_FILES` |
+| `log_level` | `INFO` | → `MERGEGUARD_LOG_LEVEL` |
 | `dry_run` | `false` | → `MERGEGUARD_DRY_RUN` |
 | `throttling_rate_limit` / `throttling_burst_limit` | `10` / `20` | API Gateway stage throttling |
-| `reserved_concurrency` | unset | Optional cap; requires available account concurrency |
+| `reserved_concurrency` | unset (`-1`, unreserved) | Optional cap. Set it once the account's concurrency quota allows ([SECURITY.md](SECURITY.md) §5.9) |
 
 Put local overrides in `terraform/terraform.tfvars`, which must be git-ignored. It must never contain secrets.
 
@@ -99,13 +115,25 @@ Put local overrides in `terraform/terraform.tfvars`, which must be git-ignored. 
 
 ```bash
 terraform -chdir=terraform init
+terraform -chdir=terraform test          # no credentials needed; mocked AWS provider
 terraform -chdir=terraform plan -out=tfplan
-# Review the plan: expect IAM role + policy, Lambda, log group, HTTP API, stage, integration, route, permission
+# Review the plan: 13 resources to add (table below)
 terraform -chdir=terraform apply tfplan
 terraform -chdir=terraform output -raw github_webhook_url
 ```
 
-The brief used `terraform apply -auto-approve`. Reviewing a saved plan is the Proposed default, because the plan shows exactly which IAM permissions are about to be granted.
+The brief used `terraform apply -auto-approve`. Reviewing a saved plan is the default here, because the plan shows exactly which IAM permissions are about to be granted.
+
+**What the plan creates** (verified without credentials by `terraform test`):
+
+| Resource | Purpose |
+| --- | --- |
+| `aws_ssm_parameter.secret` (3) | `github_token`, `webhook_secret`, `gemini_api_key` as `SecureString` placeholders (§3) |
+| `aws_iam_role.lambda`, `aws_iam_role_policy.lambda` | Execution role with exactly the [SECURITY.md](SECURITY.md) §5.3 policy |
+| `aws_cloudwatch_log_group.lambda`, `.api_access` | Lambda logs and API Gateway access logs, 14-day retention |
+| `aws_lambda_function.reviewer` | Python 3.12, 256 MB, 30 s, code zipped from `src/` |
+| `aws_apigatewayv2_api.webhook`, `_stage.default`, `_integration.lambda`, `_route.webhook` | HTTP API, `$default` stage with throttling and access logs, `POST /webhook` only |
+| `aws_lambda_permission.api` | Lets only `POST /webhook` of this API invoke the function |
 
 ## 6. Connect the GitHub webhook
 
@@ -128,7 +156,7 @@ Run [TESTING_STRATEGY.md](TESTING_STRATEGY.md) §7, at least E2E-1, E2E-2, E2E-5
 aws logs tail /aws/lambda/mergeguard-ai-pr-reviewer --follow --region us-east-1
 ```
 
-`aws logs tail` requires AWS CLI v2.
+`aws logs tail` requires AWS CLI v2. API Gateway access logs (request metadata only) are in `/aws/apigateway/mergeguard-webhook-gateway`.
 
 ## 8. CI/CD and remote state (Phase 2, Proposed)
 
@@ -151,7 +179,7 @@ aws logs tail /aws/lambda/mergeguard-ai-pr-reviewer --follow --region us-east-1
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
 | Every delivery returns `401` | Webhook secret differs between GitHub and SSM (EC-12) | Set both to the same value; redeliver failed deliveries |
-| Every delivery returns `500` immediately after deploy | Import-time error in the code (compare RB-01) or missing SSM parameter | Check the log group for `error.unhandled` or init errors; fix and redeploy |
+| Every delivery returns `500` immediately after deploy | SSM parameters still hold the Terraform placeholder (`config.failed`), an import-time code error (compare RB-01), or a missing parameter | Set the real values (§3.2); otherwise check the log group for `error.unhandled` or init errors, fix and redeploy |
 | GitHub shows "timed out", but the review appears | Synchronous AI call exceeded GitHub's 10 s timeout (R-01) | Expected in Phase 1; fixed by FR-016 |
 | No review; logs show `github.auth_failed` | Token expired or revoked | Rotate the token ([SECURITY.md](SECURITY.md) §6) |
 | No review; logs show `github.forbidden` | Repository not selected in the token, or permission missing | Edit the token's repository access and permissions |
@@ -172,7 +200,8 @@ Follow [SECURITY.md](SECURITY.md) §6. Because of the cache TTL (FR-011), a rota
 
 ```bash
 terraform -chdir=terraform destroy
-aws ssm delete-parameters --names "/mergeguard/github_token" "/mergeguard/webhook_secret" "/mergeguard/gemini_api_key" --region us-east-1
 ```
+
+`destroy` also deletes the three SSM parameters, including the real values you stored.
 
 Then delete the webhook in each repository, revoke the GitHub token, and delete the Gemini API key.

@@ -2,7 +2,7 @@
 
 import pytest
 
-from mergeguard.config import ConfigError, SecretStore, Settings
+from mergeguard.config import PLACEHOLDER_PREFIX, ConfigError, SecretStore, Settings
 from support import TEST_GEMINI_KEY, TEST_GITHUB_TOKEN, TEST_WEBHOOK_SECRET, FakeSsm
 
 
@@ -157,6 +157,23 @@ def test_missing_gemini_key_fails_only_the_key_lookup():
     store = SecretStore("/mergeguard", lambda: ssm)
     assert store.get().github_token == TEST_GITHUB_TOKEN  # the secret gate still works
     with pytest.raises(ConfigError):
+        store.gemini_api_key()
+
+
+def test_terraform_placeholders_count_as_not_set():
+    """ADR-0007: before the operator sets real values, everything fails safe."""
+    placeholder = PLACEHOLDER_PREFIX + ":set-with-aws-ssm-put-parameter"
+    ssm = FakeSsm(
+        {
+            "/mergeguard/github_token": placeholder,
+            "/mergeguard/webhook_secret": placeholder,
+            "/mergeguard/gemini_api_key": placeholder,
+        }
+    )
+    store = SecretStore("/mergeguard", lambda: ssm)
+    with pytest.raises(ConfigError, match="placeholder"):
+        store.get()
+    with pytest.raises(ConfigError, match="placeholder"):
         store.gemini_api_key()
 
 

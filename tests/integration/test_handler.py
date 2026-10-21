@@ -11,7 +11,7 @@ import json
 import pytest
 
 import lambda_function
-from mergeguard.config import SecretStore
+from mergeguard.config import PLACEHOLDER_PREFIX, SecretStore
 from mergeguard.http import TransportError
 from mergeguard.logging_util import ALLOWED_FIELDS
 from mergeguard.prompts import SYSTEM_INSTRUCTION
@@ -307,6 +307,42 @@ def test_secret_findings_never_read_the_gemini_key_or_call_gemini():
     assert all(
         "/mergeguard/gemini_api_key" not in c["Names"] for c in harness.ssm.calls
     )
+
+
+PLACEHOLDER = PLACEHOLDER_PREFIX + ":set-with-aws-ssm-put-parameter"
+
+
+def test_placeholder_gemini_key_sends_no_diff_to_gemini():
+    """Safe to deploy before the Gemini tier is decided (OQ-05, ADR-0007)."""
+    ssm = FakeSsm(
+        {
+            "/mergeguard/github_token": TEST_GITHUB_TOKEN,
+            "/mergeguard/webhook_secret": TEST_WEBHOOK_SECRET,
+            "/mergeguard/gemini_api_key": PLACEHOLDER,
+        }
+    )
+    transport = github_api(files=[file_entry("a.py", CLEAN_PATCH)])
+    status, body = Harness(transport, ssm=ssm)(api_event(pull_request_payload()))
+    assert (status, body["reason"]) == (200, "COMMENT")
+    assert "(not_configured)" in posted_reviews(transport)[0]["body"]
+    assert gemini_calls(transport) == []  # no egress with a placeholder key
+
+
+def test_placeholder_core_secrets_fail_closed_before_any_call():
+    ssm = FakeSsm(
+        {
+            "/mergeguard/github_token": PLACEHOLDER,
+            "/mergeguard/webhook_secret": PLACEHOLDER,
+        }
+    )
+    harness = Harness(FakeTransport(), ssm=ssm)
+    # Even a request signed with the public placeholder is not accepted.
+    event = api_event(pull_request_payload(), signature=None)
+    event["headers"]["x-hub-signature-256"] = sign(event["body"].encode(), PLACEHOLDER)
+    status, body = harness(event)
+    assert (status, body["status"]) == (500, "error")
+    assert harness.transport.calls == []
+    assert "config.failed" in harness.events()
 
 
 def test_st08_injected_diff_stays_data_and_cannot_approve():

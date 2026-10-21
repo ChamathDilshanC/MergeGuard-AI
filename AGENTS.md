@@ -18,9 +18,10 @@ As of 2026-10-21 the repository contains:
 - the documentation;
 - the **M1 foundation**: tooling, a Terraform skeleton without resources, and CI;
 - the **M2 webhook pipeline**: signature check, event triage, secret scanner, decision policy, review posting with the own-PR fallback, duplicate prevention, dry run and structured logs;
-- the **M3 Gemini review** after a clean scan, tested with mocked responses only. Never make real Gemini calls until OQ-05 is decided.
+- the **M3 Gemini review** after a clean scan, tested with mocked responses only. Never make real Gemini calls until OQ-05 is decided;
+- the **M4 Terraform stack** (T-401), checked with credential-free plan tests.
 
-**Nothing is deployed.** Terraform resources (T-401) and the AI evaluation (T-304) do not exist yet; see [docs/TASKS.md](docs/TASKS.md). Do not describe features as implemented until code and tests exist.
+**Nothing is deployed.** The Terraform stack has never been applied, and the AI evaluation (T-304) does not exist yet; see [docs/TASKS.md](docs/TASKS.md). Do not describe features as implemented until code and tests exist.
 
 ## 3. Orientation and directory ownership
 
@@ -32,7 +33,7 @@ As of 2026-10-21 the repository contains:
 | `src/lambda_function.py` | Lambda entry point (`lambda_function.lambda_handler`) | Exists (M2) |
 | `src/mergeguard/` | Application modules ([ARCHITECTURE.md](docs/ARCHITECTURE.md) §4.2) | Exists (M2–M3) |
 | `tests/` | Unit, contract, integration tests, fixtures, AI evaluation set; shared fakes in `tests/support.py` | Exists (M2–M3); AI evaluation blocked (T-304, OQ-05) |
-| `terraform/` | All AWS infrastructure | Skeleton exists (M1); resources Planned (T-401) |
+| `terraform/` | All AWS infrastructure; plan tests in `terraform/tests/` | Stack written (M4, T-401); never applied |
 | `.github/workflows/` | CI (and later deploy) workflows | `ci.yml` exists (M1); deploy Planned |
 
 The maintainer and sole code owner is [@ChamathDilshanC](https://github.com/ChamathDilshanC).
@@ -67,7 +68,7 @@ The original project brief is summarised in [docs/PRD.md](docs/PRD.md) §2. Its 
 - `snake_case` names; resource names from the brief are kept ([DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) §8).
 - Pin providers; commit `.terraform.lock.hcl`.
 - Build IAM ARNs from `aws_caller_identity` and `aws_region` data sources. No `*` for account or region.
-- Never manage secret **values** in Terraform.
+- Never put real secret **values** in Terraform. SSM parameters are created with a write-only placeholder (ADR-0007); never `terraform import` them.
 
 ### Markdown (`docs/`)
 
@@ -88,8 +89,9 @@ Run the Python commands inside a Python 3.12 virtual environment, created with `
 | Type check | Not adopted in M1 (T-102): ruff `ANN` rules enforce type hints; revisit `mypy` once M2 code exists | Decided (T-102) |
 | Terraform format | `terraform -chdir=terraform fmt -check -recursive` | Verified (M1, Terraform 1.16.5) |
 | Terraform validate | `terraform -chdir=terraform init -backend=false` then `terraform -chdir=terraform validate` | Verified (M1, Terraform 1.16.5) |
-| Terraform policy scan | `checkov -d terraform` | Verified in CI (checkov 3.3.26); not installed locally |
-| Build package | Built by Terraform `archive_file`; no separate build step | Planned (T-401) |
+| Terraform plan tests | `terraform -chdir=terraform test` (mocked AWS provider, no credentials) | Verified (M4, Terraform 1.16.5) |
+| Terraform policy scan | `checkov -d terraform` | Runs in CI (checkov 3.3.26); not installed locally |
+| Build package | Built by Terraform `archive_file` in `terraform/main.tf`; no separate build step | Verified (M4, via `terraform test`) |
 | Deploy | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §5 — **maintainer only** | Planned |
 
 ## 7. Making changes
@@ -103,7 +105,7 @@ Run the Python commands inside a Python 3.12 virtual environment, created with `
 
 **Changing infrastructure:**
 
-- Edit Terraform and run `fmt`, `validate`, and `checkov`. Include the relevant `terraform plan` summary in the PR description.
+- Edit Terraform and run `fmt`, `validate`, `terraform test` and `checkov`. Include the relevant `terraform plan` summary in the PR description.
 - Never apply (§11).
 
 **Data migrations:** there is no database (stateless by design, [ARCHITECTURE.md](docs/ARCHITECTURE.md) §7). If a change seems to need persistent state, write an ADR first.
