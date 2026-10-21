@@ -9,7 +9,7 @@
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) · [API spec](API_SPEC.md) · [Security](SECURITY.md) · [Tasks](TASKS.md) |
 
-> **Implementation status:** this repository currently contains documentation only. No application code, infrastructure code, or deployment exists yet. Every capability in this document is **Planned (brief)** or **Proposed** — see the [status legend](README.md#status-legend).
+> **Implementation status:** milestone M1 (project skeleton, dev tooling, Terraform skeleton, CI) is in place, but no application logic, infrastructure resources, or deployment exist yet. Every capability in this document is still **Planned (brief)** or **Proposed** — see the [status legend](README.md#status-legend).
 
 ---
 

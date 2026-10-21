@@ -76,7 +76,7 @@ STRIDE categories: **S**poofing, **T**ampering, **R**epudiation, **I**nformation
 | TM-07 | E | Lambda role abused to read other secrets or resources | Inline policy limited to its own log group and `parameter/mergeguard/*` in one account and region | — |
 | TM-08 | D | Flooding the public endpoint drives up cost or exhausts concurrency | Invalid signatures rejected quickly; API Gateway stage throttling; optional reserved concurrency; AWS Budgets alert; Gemini only reached after a valid signature | Throttling may delay legitimate deliveries during an attack |
 | TM-09 | I | Terraform state or plan files leak | Secrets created outside Terraform; `*.tfstate*` and `tfplan` git-ignored; Phase 2 remote state in encrypted S3 | — |
-| TM-10 | T | Supply-chain compromise | Zero runtime dependencies (ADR-0002); providers pinned and `.terraform.lock.hcl` committed; GitHub Actions pinned to commit SHAs (Phase 2) | Dev-only tool compromise (pytest, ruff) |
+| TM-10 | T | Supply-chain compromise | Zero runtime dependencies (ADR-0002); providers pinned and `.terraform.lock.hcl` committed; GitHub Actions pinned to commit SHAs (M1 CI) | Dev-only tool compromise (pytest, ruff) |
 | TM-11 | T | Model output used for abuse (`@mention` spam, phishing links, oversized body) | Neutralise mentions; cap length; fixed template structure (FR-009) | Misleading prose inside the feedback section |
 | TM-12 | R | No trace of why a review was posted | Every log line carries `delivery_id`, repository, PR number, head SHA and decision; GitHub retains reviews | Log retention window (14 days proposed) |
 | TM-13 | D | External contributors open many PRs on a public repository and exhaust AI quota | Throttling; AI failures fail open; Phase 3 per-repository config can disable AI for forks | Quota exhaustion degrades reviews to scan-only |
@@ -133,7 +133,7 @@ Target inline policy for the Phase 1 execution role. ARNs are built in Terraform
 
 ### 5.8 Supply chain and repository hygiene
 
-- No runtime dependencies (ADR-0002). Dev dependencies are pinned in a dev-only requirements file (Proposed).
+- No runtime dependencies (ADR-0002), enforced by an import check in the test suite. Dev dependencies are pinned in `requirements-dev.txt`, CI tools are pinned in the workflow, and new versions follow a 14-day release cooldown.
 - Commit `.terraform.lock.hcl`. Never commit `.terraform/`, `*.tfstate*`, `tfplan`, `lambda_payload.zip`, `.env*`, or credential files.
 - Test fixtures use only well-known fake values, for example AWS's documented example key ID `AKIAIOSFODNN7EXAMPLE` ([TESTING_STRATEGY.md](TESTING_STRATEGY.md) §4).
 

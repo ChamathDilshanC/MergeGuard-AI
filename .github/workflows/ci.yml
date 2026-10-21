@@ -1,0 +1,83 @@
+# Quality gates from docs/TESTING_STRATEGY.md section 9 (T-104).
+# Third-party actions are pinned to full commit SHAs (docs/SECURITY.md TM-10).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python lint and tests (3.12)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dev tools
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format check
+        run: ruff format --check .
+
+      - name: Tests with coverage gate
+        run: python -m pytest --cov=src --cov-report=term-missing
+
+  terraform:
+    name: Terraform fmt, validate and checkov
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
+      - name: Format check
+        run: terraform -chdir=terraform fmt -check -recursive
+
+      - name: Init without backend, using the committed lock file
+        run: terraform -chdir=terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: Validate
+        run: terraform -chdir=terraform validate
+
+      - name: Set up Python for checkov
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Install checkov
+        run: python -m pip install checkov==3.3.26
+
+      - name: Policy scan
+        run: checkov -d terraform

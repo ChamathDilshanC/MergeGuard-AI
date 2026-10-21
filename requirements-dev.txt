@@ -1,0 +1,5 @@
+# Development and CI tools only. Never packaged into the Lambda (ADR-0002).
+# Pins follow a 14-day release cooldown; bump deliberately in a dedicated PR.
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.16.10

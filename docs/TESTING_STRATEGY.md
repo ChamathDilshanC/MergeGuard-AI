@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — **no tests or tooling exist yet**; all commands are Proposed |
+| Status | Draft v0.1 — M1 tooling and scaffold tests exist; feature tests arrive with M2 and later |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) · [Architecture](ARCHITECTURE.md) §13 · [Security](SECURITY.md) §8 · [AI system](AI_SYSTEM.md) §9 |
 
@@ -15,7 +15,7 @@
 
 ## 2. Test layers
 
-| Layer | Scope | Network | Runs in | Tooling (Proposed) |
+| Layer | Scope | Network | Runs in | Tooling |
 | --- | --- | --- | --- | --- |
 | Unit | Pure modules: `webhook`, `scanner`, `policy`, `render`, `ai_reviewer` validation, `config` parsing | None | CI, every PR | `pytest` |
 | Contract | GitHub and Gemini clients against recorded, sanitised responses | None (fake transport) | CI | `pytest` + fixtures |
@@ -60,7 +60,7 @@ The scanner is the product's main security control, so it has its own corpus in 
 
 ## 5. Infrastructure tests
 
-| Check | Command (Proposed) | Gate |
+| Check | Command | Gate |
 | --- | --- | --- |
 | Formatting | `terraform -chdir=terraform fmt -check -recursive` | Must pass |
 | Validation | `terraform -chdir=terraform init -backend=false` then `terraform -chdir=terraform validate` | Must pass |
@@ -119,7 +119,7 @@ Record the outcome (pass/fail, delivery IDs, date) in the release PR description
 | FR-014 | Marker matching | Existing reviews | ✓ | E2E-6 |
 | FR-015 | — | — | Dry-run test | — |
 
-## 9. Quality gates (CI, Proposed)
+## 9. Quality gates (CI)
 
 A PR can merge only when all of these hold:
 
@@ -130,12 +130,14 @@ A PR can merge only when all of these hold:
 5. The Lambda package contains first-party code only (NFR-008).
 6. The docs are updated when behaviour, configuration, or contracts change ([AGENTS.md](../AGENTS.md) §9).
 
-## 10. Commands (Proposed — become verified in task T-102)
+## 10. Commands
 
-| Purpose | Command |
-| --- | --- |
-| Install dev tools | `python -m pip install -r requirements-dev.txt` |
-| Run tests | `python -m pytest` |
-| Coverage | `python -m pytest --cov=src --cov-report=term-missing` |
-| Lint / format check | `ruff check .` and `ruff format --check .` |
-| Terraform checks | See §5 |
+| Purpose | Command | Status |
+| --- | --- | --- |
+| Install dev tools | `python -m pip install -r requirements-dev.txt` | Verified (M1) |
+| Run tests | `python -m pytest` | Verified (M1) |
+| Coverage | `python -m pytest --cov=src --cov-report=term-missing` | Verified (M1); fails below 85% |
+| Lint / format check | `ruff check .` and `ruff format --check .` | Verified (M1) |
+| Terraform checks | See §5 | `fmt` and `validate` Verified (M1); `checkov` runs in CI only; plan review starts in T-401 |
+
+Quality gates 1–5 in §9 are automated in `.github/workflows/ci.yml`. Gate 5 is the import check in `tests/unit/test_runtime_dependencies.py`. Gate 6 (docs updated) is a review item.

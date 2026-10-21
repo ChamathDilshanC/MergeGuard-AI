@@ -2,7 +2,7 @@
 
 Thank you for your interest. This project is maintained by [@ChamathDilshanC](https://github.com/ChamathDilshanC), the sole listed maintainer, who reviews and merges all changes.
 
-> **Project status:** documentation only. Implementation starts with milestone M1 in [docs/TASKS.md](docs/TASKS.md). Setup commands below are **Proposed** until task T-102 lands.
+> **Project status:** the M1 foundation (tooling, Terraform skeleton, CI) is in place; no product feature is implemented yet. Feature work starts with milestone M2 in [docs/TASKS.md](docs/TASKS.md).
 
 ## 1. Before you start
 
@@ -16,21 +16,24 @@ Thank you for your interest. This project is maintained by [@ChamathDilshanC](ht
 | --- | --- | --- |
 | Git | Recent | Everything |
 | Python | **3.12** (Lambda runtime) | Code and tests |
-| Terraform | Pinned in `terraform/versions.tf` (TBD) | Infrastructure changes |
+| Terraform | `>= 1.5, < 2.0` (CI uses 1.16.5) | Infrastructure changes |
 | AWS CLI | v2 recommended | Deployment by the maintainer only |
 
 You do **not** need AWS, GitHub, or Gemini credentials to develop or run the test suite; tests run offline ([docs/TESTING_STRATEGY.md](docs/TESTING_STRATEGY.md)).
 
-## 3. Setup (Proposed)
+## 3. Setup
 
 ```bash
 git clone <repository-url>
 cd <repository-folder>
-python3.12 -m venv .venv
+python3.12 -m venv .venv           # Windows: py -3.12 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
 python -m pip install -r requirements-dev.txt
-python -m pytest
+ruff check . && ruff format --check .
+python -m pytest --cov=src --cov-report=term-missing
 ```
+
+Terraform checks are listed in [AGENTS.md](AGENTS.md) §6.
 
 ## 4. Workflow
 

@@ -1,0 +1,36 @@
+# Terraform: provider cache, state, plans, local variables, crash logs.
+# .terraform.lock.hcl is intentionally NOT ignored; it must be committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+*.tfplan
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+
+# Build artifacts (Terraform writes the Lambda zip)
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Secrets and local environment files
+.env
+.env.*
+
+# AI evaluation output (aggregate metrics go in the PR description instead)
+tests/ai_eval/results/
+
+# OS files
+.DS_Store
+Thumbs.db

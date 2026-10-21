@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — target architecture; **nothing implemented yet** |
+| Status | Draft v0.1 — target architecture; M1 foundation in place, **no features implemented yet** |
 | Last updated | 2026-10-21 |
 | Owner | [@ChamathDilshanC](https://github.com/ChamathDilshanC) |
 | Related | [PRD](PRD.md) · [API spec](API_SPEC.md) · [Security](SECURITY.md) · [Deployment](DEPLOYMENT.md) · [ADRs](ADR/README.md) |
@@ -11,7 +11,7 @@
 
 This document describes how MergeGuard AI is built. It covers the **Phase 1 (MVP)** architecture, which follows the owner's brief with its defects fixed, and the **Phase 2–3 target architecture**.
 
-**Current state (verified 2026-10-21):** the repository contains only documentation. There is no source code, Terraform, CI configuration, or deployed infrastructure. Component names below come from the brief (Planned) or are recommendations (Proposed).
+**Current state (verified 2026-10-21):** milestone M1 added the project skeleton, dev tooling, a Terraform skeleton without resources, and a CI workflow (§4.1). There is no application logic and no deployed infrastructure. Component names below come from the brief (Planned) or are recommendations (Proposed).
 
 ## 2. System context
 
@@ -41,10 +41,10 @@ flowchart LR
 | Logs | Amazon CloudWatch Logs, `/aws/lambda/mergeguard-ai-pr-reviewer` | Planned (brief), retention Proposed |
 | AI | Google Gemini `generateContent`, model `gemini-2.5-flash` (configurable) | Planned (brief) |
 | Source control integration | GitHub webhooks + REST API, fine-grained PAT | Planned (brief) |
-| Infrastructure as code | Terraform, providers `hashicorp/aws` (`~> 5.0` in brief) and `hashicorp/archive` (`~> 2.4`) | Planned (brief); version [OQ-07](PRD.md#17-open-questions) |
+| Infrastructure as code | Terraform `>= 1.5, < 2.0`; providers `hashicorp/aws` (`~> 5.0` in brief, locked at 5.100.0) and `hashicorp/archive` (`~> 2.4`, locked at 2.8.1) | Skeleton Verified (M1); resources Planned (T-401); AWS major version [OQ-07](PRD.md#17-open-questions) |
 | Async processing | Amazon SQS standard queue + dead-letter queue | Proposed (Phase 2), [ADR-0005](ADR/0005-async-webhook-processing.md) |
-| Dev tooling | `pytest`, `ruff`, `terraform fmt/validate`, `checkov` (dev-only) | Proposed |
-| CI/CD | GitHub Actions; AWS access via OIDC role (no static keys) | Proposed (Phase 2 for deploy) |
+| Dev tooling | `pytest` 9.1.1, `pytest-cov` 7.1.0, `ruff` 0.16.10 (`requirements-dev.txt`); Terraform 1.16.5 and `checkov` 3.3.26 pinned in CI (dev-only) | Verified (M1), except checkov (CI only) |
+| CI/CD | GitHub Actions `ci.yml` (lint, tests, Terraform checks); deploy with AWS access via OIDC role (no static keys) | CI added in M1, pending first run; deploy Proposed (Phase 2) |
 
 ## 4. Repository and module map
 
@@ -52,11 +52,27 @@ flowchart LR
 
 ```text
 .
-├── AGENTS.md            # Coding-agent and contributor operating guide
+├── .github/workflows/ci.yml   # Lint, tests, Terraform fmt/validate, checkov
+├── .gitignore
+├── .python-version            # 3.12 (Lambda runtime)
+├── AGENTS.md                  # Coding-agent and contributor operating guide
 ├── CONTRIBUTING.md
 ├── CONTRIBUTORS.md
 ├── README.md
-└── docs/                # This documentation suite
+├── pyproject.toml             # ruff, pytest, coverage configuration
+├── requirements-dev.txt       # Pinned dev-only tools
+├── docs/                      # This documentation suite
+├── src/
+│   └── mergeguard/__init__.py # Package skeleton; modules arrive with their tasks
+├── terraform/
+│   ├── .terraform.lock.hcl
+│   ├── providers.tf
+│   ├── variables.tf           # Variables from DEPLOYMENT.md section 4; no resources yet
+│   └── versions.tf
+└── tests/
+    ├── fixtures/              # Empty until M2
+    ├── integration/           # Empty until M2
+    └── unit/                  # Scaffold tests, including the ADR-0002 import gate
 ```
 
 ### 4.2 Proposed (Phase 1)

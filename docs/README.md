@@ -12,7 +12,7 @@ Documentation for MergeGuard AI, a serverless DevSecOps pull-request reviewer. F
 | **Assumption** | Treated as true for planning; must be validated |
 | **Open** / **TBD** | Undecided; tracked as `OQ-` items in [PRD.md](PRD.md) §17 |
 
-As of 2026-10-21, **nothing is Verified**. The repository contains documentation only.
+As of 2026-10-21, only the M1 foundation is Verified: dev tooling, scaffold tests, and the Terraform skeleton. **No product feature is implemented yet.**
 
 ## Core documents
 

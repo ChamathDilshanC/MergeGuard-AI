@@ -1,6 +1,6 @@
 # MergeGuard AI — Serverless DevSecOps PR Reviewer
 
-> **Status: planning.** This repository currently contains the project documentation only. No code or infrastructure has been implemented yet. See the [roadmap](docs/PRD.md#18-roadmap) and [backlog](docs/TASKS.md).
+> **Status: foundation (M1).** This repository contains the project documentation, the project skeleton, dev tooling, a Terraform skeleton, and CI. No product feature is implemented yet. See the [roadmap](docs/PRD.md#18-roadmap) and [backlog](docs/TASKS.md).
 
 MergeGuard AI reviews GitHub pull requests automatically, without any server to run:
 
