@@ -91,5 +91,13 @@ jobs:
       - name: Install checkov
         run: python -m pip install checkov==3.3.26
 
+      # checkov skips a file it cannot parse and still exits 0, so a parse error
+      # would silently remove that file from the scan. Fail on it.
       - name: Policy scan
-        run: checkov -d terraform
+        run: |
+          set -o pipefail
+          checkov -d terraform | tee checkov.log
+          if grep -q "Parsing errors" checkov.log; then
+            echo "::error::checkov could not parse a Terraform file, so it was not scanned"
+            exit 1
+          fi

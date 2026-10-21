@@ -71,7 +71,7 @@ The suite enforces **0%** flagged negatives, stricter than the SM-3 gate.
 | Validation | `terraform -chdir=terraform init -backend=false` then `terraform -chdir=terraform validate` | Must pass |
 | Plan tests | `terraform -chdir=terraform test` (AWS provider mocked; no credentials) | Must pass; asserts the SECURITY.md §5.3 receiver and worker policies, the queue and redrive settings, throttling, route, retention, alarms, the budget and SSM placeholders |
 | Bootstrap checks | `terraform -chdir=terraform/bootstrap init -backend=false`, then `validate` and `test` | Must pass; asserts the state bucket protections, the OIDC trust policy (exact subjects, no wildcard) and the scope of the deploy role |
-| Policy scan | `checkov -d terraform` | No unresolved high-severity findings; accepted findings documented inline with a reason |
+| Policy scan | `checkov -d terraform` | No unresolved high-severity findings; accepted findings documented inline with a reason. CI also fails on a checkov **parsing error**, because checkov skips an unparsable file and still exits 0 |
 | Plan review | `terraform -chdir=terraform plan` against the sandbox account | Manual review before every apply |
 
 ## 6. Security tests

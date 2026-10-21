@@ -189,15 +189,21 @@ variable "scan_allow_paths" {
   type        = list(string)
   default     = []
 
+  # One condition per line: checkov's HCL parser cannot read a condition that
+  # continues across lines inside a for expression.
   validation {
-    condition = alltrue([
-      for pattern in var.scan_allow_paths :
-      can(regex("^[A-Za-z0-9_./*?@+=~ -]{1,200}$", pattern))
-      && !startswith(pattern, "/")
-      && !strcontains(pattern, "..")
-      && trim(pattern, "*?/") != ""
-    ])
-    error_message = "Each scan_allow_paths entry must be a relative path glob of at most 200 characters, without commas or '..', and must name a path (a bare wildcard would switch the scanner off)."
+    condition     = alltrue([for pattern in var.scan_allow_paths : can(regex("^[A-Za-z0-9_./*?@+=~ -]{1,200}$", pattern))])
+    error_message = "Each scan_allow_paths entry must be at most 200 characters of path characters, without commas."
+  }
+
+  validation {
+    condition     = alltrue([for pattern in var.scan_allow_paths : !startswith(pattern, "/") && !strcontains(pattern, "..")])
+    error_message = "Each scan_allow_paths entry must be a relative path glob without '..'."
+  }
+
+  validation {
+    condition     = alltrue([for pattern in var.scan_allow_paths : trim(pattern, "*?/") != ""])
+    error_message = "Each scan_allow_paths entry must name a path: a bare wildcard would switch the scanner off."
   }
 
   validation {

@@ -175,3 +175,12 @@ def test_ci_checks_the_bootstrap_stack_without_credentials():
     assert "terraform -chdir=terraform/bootstrap validate" in body
     assert "terraform -chdir=terraform/bootstrap test" in body
     assert "configure-aws-credentials" not in text("ci.yml")
+
+
+def test_ci_fails_when_checkov_cannot_parse_a_terraform_file():
+    """checkov exits 0 after skipping a file it cannot parse, which would remove
+    that file from the scan without a trace."""
+    body = job("ci.yml", "terraform")
+    assert "checkov -d terraform | tee checkov.log" in body
+    assert 'grep -q "Parsing errors" checkov.log' in body
+    assert "set -o pipefail" in body
