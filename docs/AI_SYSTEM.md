@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — implemented in M3 (`prompts.py`, `ai_reviewer.py`) and tested with mocked responses only; **no real Gemini call has been made** (tier undecided, OQ-05). M6 adds an **opt-in, unevaluated** prompt `review-v2` for per-line findings (§4.1) |
+| Status | Draft v0.1 — implemented in M3 (`prompts.py`, `ai_reviewer.py`) and tested with mocked responses only; **no real Gemini call has been made** (the paid tier is decided, OQ-05, 2026-10-22; no key is stored yet). M6 adds an **opt-in, unevaluated** prompt `review-v2` for per-line findings (§4.1) |
 | Last updated | 2026-10-21 |
 | Related | [PRD](PRD.md) FR-007, FR-008 · [API spec](API_SPEC.md) §4 · [Security](SECURITY.md) TM-03, TM-04 |
 
@@ -37,11 +37,11 @@ Model availability and names change over time. Confirm that the configured model
 | Diffs with secret findings | **Never** | ADR-0004 |
 | Lines the scanner flagged but a suppression waved through (FR-019) | **Never** | Each is replaced by the stub `+[line withheld: suppressed secret finding]` before the diff is bundled, so line numbers and hunks stay intact and the rest of the diff is still reviewed. For a suppressed private-key header, the key lines after it are withheld up to the `END` line (ADR-0008) |
 
-**Provider terms.** Data-use terms differ between Gemini's unpaid and paid tiers. Under Google's published terms, content sent to unpaid services may be used to improve Google's products and may be seen by human reviewers. Before using MergeGuard on proprietary or third-party code, the owner must:
+**Provider terms.** Data-use terms differ between Gemini's unpaid and paid tiers. Under Google's published terms, content sent to unpaid services may be used to improve Google's products and may be seen by human reviewers. **Decision ([OQ-05](PRD.md#17-open-questions), 2026-10-22): the paid tier.** Before the key is stored, the owner must:
 
-1. read the current terms;
-2. choose a tier;
-3. record the decision under [OQ-05](PRD.md#17-open-questions).
+1. enable billing on the Google Cloud project that owns the key;
+2. read Google's current paid-tier data terms (they change, so check them then);
+3. create a Google Cloud budget alert and a quota for the Gemini API on that project ([DEPLOYMENT.md](DEPLOYMENT.md) §3.3). The AWS budget does not see Gemini usage.
 
 MergeGuard stores no prompts or responses.
 
@@ -107,7 +107,7 @@ The brief put instructions and diff in a single prompt string. M3 separates them
   appear in the diff. Use an empty list if there is nothing line-specific.
 ```
 
-- **Not evaluated.** The evaluation (T-304) is blocked on OQ-05, so neither the quality of the findings nor how often the model counts line numbers correctly is measured. That is why `all` is opt-in, why Terraform defaults to `secrets`, and why the default prompt is unchanged. Per [AGENTS.md](../AGENTS.md) §7, run the evaluation, record the metrics and review the line accuracy before turning `all` on for real repositories.
+- **Not evaluated.** The evaluation (T-304) needs real Gemini calls with the paid-tier key, which exist only after deployment, so neither the quality of the findings nor how often the model counts line numbers correctly is measured. That is why `all` is opt-in, why Terraform defaults to `secrets`, and why the default prompt is unchanged. Per [AGENTS.md](../AGENTS.md) §7, run the evaluation, record the metrics and review the line accuracy before turning `all` on for real repositories.
 - **Fail-soft.** `findings` is not required. A malformed item is dropped and never fails the review; the other fields are validated exactly as before. At most 10 items are kept.
 - **Anchoring is checked in code**, not trusted: a finding becomes an inline comment only if its file was sent in full and its line is an added or context line of that file's diff, excluding lines withheld under ADR-0008 (`inline.py`). Wrong lines are dropped, not guessed.
 - `PROMPT_VERSION` stays `review-v1`; `review-v2` is `PROMPT_VERSION_FINDINGS`. The version that was used is logged with every call.
@@ -193,7 +193,7 @@ No AI failure ever results in `REQUEST_CHANGES`. Retrying is not automatic in Ph
 
 ## 9. Evaluation
 
-**Status:** Blocked (task T-304). It needs real Gemini calls, which wait for the tier decision (OQ-05). This is an offline evaluation, run manually before changing the model, prompt, or generation settings.
+**Status:** Blocked (task T-304). It needs real Gemini calls: the paid tier is decided (OQ-05), but the key is stored only at deployment, and OQ-04 (whether `MEDIUM` requests changes) is decided with this evaluation. This is an offline evaluation, run manually before changing the model, prompt, or generation settings.
 
 - **Dataset:** `tests/ai_eval/cases/` — about 30 synthetic diffs, each labelled with an expected `risk_level` range and expected key findings. Categories:
   - clean refactor and docs-only change;
@@ -221,7 +221,7 @@ No AI failure ever results in `REQUEST_CHANGES`. Retrying is not automatic in Ph
 ## 10. Cost and latency
 
 - **Cost driver:** one `generateContent` call per reviewed head SHA. There are no calls for ignored events, duplicates, or secret-positive diffs.
-- Input size is capped by the diff budget (§6). Pricing and free-tier rate limits are set by Google and change; check the current Gemini pricing page and record the expected monthly cost under OQ-05.
+- Input size is capped by the diff budget (§6). Pricing and free-tier rate limits are set by Google and change; check the current Gemini pricing page, and set the Google Cloud budget alert and quota from the expected monthly cost (OQ-05, [DEPLOYMENT.md](DEPLOYMENT.md) §3.3).
 - **Latency:** measured during evaluation. It must fit the Phase 1 budget in [ARCHITECTURE.md](ARCHITECTURE.md) §6, and Phase 2 removes the GitHub 10 s constraint.
 
 ## 11. Model lifecycle

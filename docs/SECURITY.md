@@ -108,7 +108,7 @@ STRIDE categories: **S**poofing, **T**ampering, **R**epudiation, **I**nformation
 ### 5.2 GitHub token
 
 - Phase 1: a fine-grained personal access token with the permissions in [API_SPEC.md](API_SPEC.md) §3.3, restricted to the target repositories, with an expiry date.
-- Prefer a dedicated machine account over the maintainer's personal account ([OQ-06](PRD.md#17-open-questions)). This also avoids the own-PR `422` limitation.
+- The GitHub App is the target identity ([OQ-06](PRD.md#17-open-questions), decided: staged). Until it is confirmed, this token is the fallback: prefer a dedicated machine account over the maintainer's personal account, which also avoids the own-PR `422` limitation.
 - Phase 3 (M6): GitHub App installation tokens, minted per repository with minimal permissions and valid for at most an hour ([ADR-0006](ADR/0006-github-identity-pat-then-app.md), [ADR-0010](ADR/0010-github-app-jwt-signing-without-dependencies.md), §5.11). Set `github_app_id` to switch; the personal access token is then never read.
 
 ### 5.3 IAM (FR-012)
@@ -148,7 +148,7 @@ The queues use SSE-SQS. The dead-letter queue accepts redrives only from the rev
 - Only the size-limited diff (file names and patch hunks) is sent. PR title, description, author, and repository metadata are **not** sent in Phase 1.
 - Nothing is sent when the secret scan finds anything. Lines that the scanner flagged but a suppression waved through (FR-019) are replaced by a fixed stub before the diff is bundled, so they never leave AWS either ([ADR-0008](ADR/0008-scanner-suppressions-are-visible-and-withheld-from-ai.md)).
 - The Gemini key is read from SSM only when an AI review runs. A missing key degrades to the AI-unavailable comment rather than a `500`, so the secret gate never depends on the AI provider.
-- The owner must check the current Gemini API terms for the chosen tier before reviewing proprietary code. Under Google's published terms, content sent to unpaid tiers may be used to improve Google's products. Tracked as [OQ-05](PRD.md#17-open-questions); see [AI_SYSTEM.md](AI_SYSTEM.md) §3.
+- The paid tier is decided ([OQ-05](PRD.md#17-open-questions), 2026-10-22), because under Google's published terms content sent to unpaid tiers may be used to improve Google's products. The owner still checks the current paid-tier terms, and enables billing, before the key is stored. A Google Cloud budget alert and quota limit the cost; see [AI_SYSTEM.md](AI_SYSTEM.md) §3 and [DEPLOYMENT.md](DEPLOYMENT.md) §3.3.
 
 ### 5.6 Logging and redaction (FR-013)
 
@@ -163,7 +163,7 @@ The queues use SSE-SQS. The dead-letter queue accepts redrives only from the rev
 - The Lambda permission allows only `POST /webhook` of this API (M4).
 - Optional reserved concurrency for the receiver (`reserved_concurrency`, unset by default). New AWS accounts can have low concurrency quotas that prevent reserving capacity, so check *Service Quotas* first.
 - CloudWatch alarms (written in M5, T-506): the dead-letter queue is not empty, the webhook returned `5xx`, and either Lambda reported an error. They publish to an SNS topic; `alert_email` subscribes an address.
-- An AWS Budgets alert on account-wide monthly cost (80% of actual, 100% of forecast), created when `monthly_budget_usd` and `alert_email` are set. The amount is the owner's decision (OQ-05).
+- An AWS Budgets alert on account-wide monthly cost (80% of actual, 100% of forecast), created when `monthly_budget_usd` and `alert_email` are set. It covers **AWS spend only**: it cannot see Gemini usage, which needs its own Google Cloud budget alert and quota (OQ-05). A budget alerts; it does not cap spending. The amount is the owner's decision.
 
 ### 5.8 Supply chain and repository hygiene
 

@@ -18,7 +18,7 @@ As of 2026-10-21 the repository contains:
 - the documentation;
 - the **M1 foundation**: tooling, a Terraform skeleton without resources, and CI;
 - the **M2 webhook pipeline**: signature check, event triage, secret scanner, decision policy, review posting with the own-PR fallback, duplicate prevention, dry run and structured logs;
-- the **M3 Gemini review** after a clean scan, tested with mocked responses only. Never make real Gemini calls until OQ-05 is decided;
+- the **M3 Gemini review** after a clean scan, tested with mocked responses only. Never make real Gemini calls unless the maintainer asks for them in the current task: the paid tier is decided (OQ-05), but no key is stored, and a real call sends code to a third party and costs money;
 - the **M4 Terraform stack** (T-401), checked with credential-free plan tests;
 - the **M5 Phase 2 work**, tested with fakes and a mocked AWS provider: the receiver/worker split with an SQS queue and dead-letter queue (T-501), the commit status (T-502), stale-review dismissal (T-503), scanner suppressions (T-504), a bootstrap stack and a CI deploy workflow (T-505), and alarms with a budget alert (T-506);
 - the **M6 Phase 3 work**, tested with fakes: GitHub App authentication with a pure-Python RS256 signer (T-601), inline line-level comments (T-602) and per-repository configuration read from the base commit (T-603).
@@ -166,6 +166,7 @@ Unless the maintainer explicitly asks for it in the current task, do **not**:
 - force-push, rewrite published history, delete branches, bypass hooks (`--no-verify`), or change the remote URL;
 - commit `.terraform/`, `*.tfstate*`, `tfplan`, `*.zip`, `terraform.tfvars`, `.env*`, or credential files;
 - use `git add .` or `git add -A`; stage explicit paths only;
+- make a real Gemini call, or store a Gemini key (they send code to a third party and cost money);
 - weaken a security control to make a test pass.
 
 ## 12. Definition of done
