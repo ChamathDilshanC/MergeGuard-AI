@@ -27,7 +27,7 @@
 | ID | Task | Requirements | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- |
 | T-001 | Create the project documentation suite | All | PRD, architecture, design system, API, security, AI, testing, deployment, ADRs, agent and contributor guides exist and cross-reference each other | Done |
-| T-002 | Owner review of docs; answer M1 open questions (OQ-01, 02, 07, 08, 11) | — | Answers recorded in [PRD.md](PRD.md) §17; affected docs updated | Not started |
+| T-002 | Owner review of docs; answer M1 open questions (OQ-02, 07, 08, 11; OQ-01 resolved) | — | Answers recorded in [PRD.md](PRD.md) §17; affected docs updated | Not started |
 
 ## M1 — Foundation
 

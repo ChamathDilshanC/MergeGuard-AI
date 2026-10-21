@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | Product | MergeGuard AI — serverless DevSecOps pull-request reviewer |
-| Repository (working name) | ZeroOps-PR |
+| Repository | [ChamathDilshanC/MergeGuard-AI](https://github.com/ChamathDilshanC/MergeGuard-AI) (private) |
 | Owner / maintainer | [@ChamathDilshanC](https://github.com/ChamathDilshanC) |
 | Document status | Draft v0.1 — pre-implementation |
 | Last updated | 2026-10-21 |
@@ -520,7 +520,7 @@ All targets are **Proposed** until the owner confirms them.
 
 | ID | Question | Needed by |
 | --- | --- | --- |
-| OQ-01 | Final product and repository name: "MergeGuard AI" (brief) or "ZeroOps-PR" (folder)? GitHub repository visibility? | M1 |
+| OQ-01 | **Resolved 2026-10-21:** product name is MergeGuard AI; repository `ChamathDilshanC/MergeGuard-AI`, private | M1 |
 | OQ-02 | Who is the primary audience: personal or portfolio use, small teams, or organisation-wide? | M1 |
 | OQ-03 | Comment language: English only, or optional Sinhala as in the brief's alert text? | M2 |
 | OQ-04 | Should AI `MEDIUM` risk request changes, or only `HIGH`? | M3 |

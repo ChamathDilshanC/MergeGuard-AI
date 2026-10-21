@@ -4,7 +4,7 @@ This file tells any automated coding agent, or a human working like one, how to 
 
 ## 1. Repository purpose
 
-**MergeGuard AI** (repository working name **ZeroOps-PR**) is a serverless GitHub pull-request reviewer for DevSecOps. A signed GitHub webhook reaches API Gateway → Lambda (Python 3.12). The Lambda then:
+**MergeGuard AI** (repository [`ChamathDilshanC/MergeGuard-AI`](https://github.com/ChamathDilshanC/MergeGuard-AI)) is a serverless GitHub pull-request reviewer for DevSecOps. A signed GitHub webhook reaches API Gateway → Lambda (Python 3.12). The Lambda then:
 
 1. blocks PRs that contain hardcoded credentials;
 2. otherwise posts a Gemini-generated code review.
