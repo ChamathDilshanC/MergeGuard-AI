@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — webhook verification, secret loading, secret scanning, review sanitisation, log redaction and duplicate handling implemented in M2; AI data handling and prompt-injection defences in M3 (mocked Gemini only); **not deployed**; IAM and abuse controls arrive with T-401 |
+| Status | Draft v0.1 — webhook verification, secret loading, secret scanning, review sanitisation, log redaction and duplicate handling implemented in M2; AI data handling and prompt-injection defences in M3 (mocked Gemini only); **not deployed**; IAM, throttling and logging written in Terraform (M4, never applied) |
 | Last updated | 2026-10-21 |
 | Owner | [@ChamathDilshanC](https://github.com/ChamathDilshanC) |
 | Related | [Architecture](ARCHITECTURE.md) · [AI system](AI_SYSTEM.md) · [Deployment](DEPLOYMENT.md) |
@@ -75,10 +75,10 @@ STRIDE categories: **S**poofing, **T**ampering, **R**epudiation, **I**nformation
 | TM-06 | E | Stolen GitHub token is used beyond reviewing | Fine-grained PAT, selected repositories only, no contents write or admin permissions, expiry date, SSM storage | Abuse within PR-write scope until revoked (IR-1) |
 | TM-07 | E | Lambda role abused to read other secrets or resources | Inline policy limited to its own log group and `parameter/mergeguard/*` in one account and region | — |
 | TM-08 | D | Flooding the public endpoint drives up cost or exhausts concurrency | Invalid signatures rejected quickly; API Gateway stage throttling; optional reserved concurrency; AWS Budgets alert; Gemini only reached after a valid signature | Throttling may delay legitimate deliveries during an attack |
-| TM-09 | I | Terraform state or plan files leak | Secrets created outside Terraform; `*.tfstate*` and `tfplan` git-ignored; Phase 2 remote state in encrypted S3 | — |
+| TM-09 | I | Terraform state or plan files leak | Secret values never enter state: parameters use write-only placeholders (ADR-0007) and are never imported; `*.tfstate*` and `tfplan` git-ignored; Phase 2 remote state in encrypted S3 | — |
 | TM-10 | T | Supply-chain compromise | Zero runtime dependencies (ADR-0002); providers pinned and `.terraform.lock.hcl` committed; GitHub Actions pinned to commit SHAs (M1 CI) | Dev-only tool compromise (pytest, ruff) |
 | TM-11 | T | Model output used for abuse (`@mention` spam, phishing links, oversized body) | Neutralise mentions; cap length; fixed template structure (FR-009) | Misleading prose inside the feedback section |
-| TM-12 | R | No trace of why a review was posted | Every log line carries `delivery_id`, repository, PR number, head SHA and decision; GitHub retains reviews | Log retention window (14 days proposed) |
+| TM-12 | R | No trace of why a review was posted | Every log line carries `delivery_id`, repository, PR number, head SHA and decision; API Gateway access logs record each request (M4); GitHub retains reviews | Log retention window (14 days) |
 | TM-13 | D | External contributors open many PRs on a public repository and exhaust AI quota | Throttling; AI failures fail open; Phase 3 per-repository config can disable AI for forks | Quota exhaustion degrades reviews to scan-only |
 | TM-14 | S/T | A PR author posts their own review containing a copy of MergeGuard's hidden marker for the head SHA, so the duplicate check skips the real security review | A review counts as a duplicate only if its author is the token owner (`GET /user`), its `commit_id` matches, and it carries the marker (FR-014) | Phase 3 GitHub App tokens cannot call `GET /user`; the identity check must be redone then (ADR-0006) |
 
@@ -99,7 +99,7 @@ STRIDE categories: **S**poofing, **T**ampering, **R**epudiation, **I**nformation
 
 ### 5.3 IAM (FR-012)
 
-Target inline policy for the Phase 1 execution role. ARNs are built in Terraform from data sources, never wildcards:
+Inline policy of the Phase 1 execution role. It is implemented in `terraform/main.tf` (T-401) and enforced by `terraform/tests/plan.tftest.hcl`, which fails if any action or resource changes. ARNs are built from data sources, never wildcards:
 
 | Action | Resource |
 | --- | --- |
@@ -111,7 +111,9 @@ Target inline policy for the Phase 1 execution role. ARNs are built in Terraform
 
 ### 5.4 Secrets management
 
-- Secrets are created with the AWS CLI as `SecureString` ([DEPLOYMENT.md](DEPLOYMENT.md) §3). Keep them out of shell history by reading them interactively, not by typing them inline.
+- Terraform creates the parameters as `SecureString` with a public placeholder, through the write-only `value_wo` argument, so no value ever enters plan or state ([ADR-0007](ADR/0007-ssm-placeholders-with-write-only-values.md)). Never `terraform import` them: an import reads the real value into state.
+- Operators store the real values with the AWS CLI (`--overwrite`, [DEPLOYMENT.md](DEPLOYMENT.md) §3.2), reading them interactively so they stay out of shell history.
+- The Lambda treats a placeholder value as not set. Placeholder core secrets fail closed, so the public placeholder can never act as a webhook secret. A placeholder Gemini key means no diff is sent to Gemini.
 - The webhook secret is random: at least 32 bytes from a CSPRNG, for example `secrets.token_hex(32)`. Do not use memorable strings like the brief's example.
 - Lambda caches values per execution environment with a TTL (Proposed: 15 minutes), so a rotation takes effect without a redeploy.
 
@@ -129,15 +131,35 @@ Target inline policy for the Phase 1 execution role. ARNs are built in Terraform
 
 ### 5.7 Abuse and cost controls
 
-- API Gateway `$default` stage throttling (Proposed defaults: rate 10 requests/s, burst 20, tunable).
-- Optional Lambda reserved concurrency. New AWS accounts can have low concurrency quotas that prevent reserving capacity, so check *Service Quotas* first.
+- API Gateway `$default` stage throttling (M4: rate 10 requests/s, burst 20, tunable).
+- API Gateway access logs (M4) record request metadata (request ID, source IP, route, status), never bodies.
+- The Lambda permission allows only `POST /webhook` of this API (M4).
+- Optional Lambda reserved concurrency (`reserved_concurrency`, unset by default). New AWS accounts can have low concurrency quotas that prevent reserving capacity, so check *Service Quotas* first.
 - AWS Budgets alert on the account (Proposed, Phase 2).
 
 ### 5.8 Supply chain and repository hygiene
 
 - No runtime dependencies (ADR-0002), enforced by an import check in the test suite. Dev dependencies are pinned in `requirements-dev.txt`, CI tools are pinned in the workflow, and new versions follow a 14-day release cooldown.
-- Commit `.terraform.lock.hcl`. Never commit `.terraform/`, `*.tfstate*`, `tfplan`, `lambda_payload.zip`, `.env*`, or credential files.
+- Commit `.terraform.lock.hcl`. Never commit `.terraform/`, `*.tfstate*`, `tfplan`, `terraform/build/lambda.zip`, `.env*`, or credential files.
 - Test fixtures use only well-known fake values, for example AWS's documented example key ID `AKIAIOSFODNN7EXAMPLE` ([TESTING_STRATEGY.md](TESTING_STRATEGY.md) §4).
+
+### 5.9 Accepted checkov findings
+
+checkov runs in CI on every PR (TESTING_STRATEGY.md §5). Each accepted finding is skipped **inline on its resource** in `terraform/main.tf`, with the reason next to it. There are no blanket skips. API Gateway access logging (CKV_AWS_76) was fixed rather than skipped.
+
+| Check | Resource | Why it is accepted |
+| --- | --- | --- |
+| CKV_AWS_50 (X-Ray tracing) | Lambda | Tracing is not planned for Phase 1 (ARCHITECTURE.md §12) and would need X-Ray permissions outside §5.3 |
+| CKV_AWS_115 (reserved concurrency) | Lambda | Optional (`reserved_concurrency`), because new accounts cannot reserve any; stage throttling caps load (TM-08) |
+| CKV_AWS_116 (dead-letter queue) | Lambda | Invoked synchronously by API Gateway, so a DLQ never receives anything; Phase 2 adds SQS with a DLQ (ADR-0005) |
+| CKV_AWS_117 (VPC) | Lambda | Calls only GitHub, Gemini and SSM over HTTPS and reaches no private resources; a VPC adds NAT cost and no protection |
+| CKV_AWS_173 (env-var CMK) | Lambda | Environment variables hold non-secret settings only; secrets come from SSM at runtime |
+| CKV_AWS_272 (code signing) | Lambda | The zip is built by Terraform from a reviewed commit; revisit with the CI deploy pipeline (T-505) |
+| CKV_AWS_337 (SSM CMK) | SSM parameters | ADR-0003 keeps the AWS-managed `aws/ssm` key |
+| CKV_AWS_158 (log group CMK) | Both log groups | Metadata-only logs, already encrypted at rest by CloudWatch Logs |
+| CKV_AWS_338 (1-year retention) | Both log groups | 14 days is the documented default (DEPLOYMENT.md §4); raise `log_retention_days` if an audit needs more |
+| CKV_AWS_309 (route authorisation) | `POST /webhook` route | GitHub cannot send IAM or JWT credentials; the Lambda verifies the HMAC signature first (FR-002, TM-01) |
+| CKV2_AWS_51 (client certificate) | `$default` stage | Client certificates apply to HTTP backends of WebSocket APIs; this HTTP API calls Lambda directly |
 
 ## 6. Secret inventory and rotation
 

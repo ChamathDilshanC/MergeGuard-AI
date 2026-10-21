@@ -12,7 +12,7 @@ Documentation for MergeGuard AI, a serverless DevSecOps pull-request reviewer. F
 | **Assumption** | Treated as true for planning; must be validated |
 | **Open** / **TBD** | Undecided; tracked as `OQ-` items in [PRD.md](PRD.md) §17 |
 
-As of 2026-10-21, M1 to M3 are Verified by automated tests, with Gemini mocked. **Nothing is deployed**, and no real Gemini call has been made (OQ-05).
+As of 2026-10-21, M1 to M4 are Verified by automated tests: Gemini is mocked, and the Terraform plan is tested against a mocked AWS provider. **Nothing is deployed**, and no real Gemini call has been made (OQ-05).
 
 ## Core documents
 
@@ -43,6 +43,7 @@ As of 2026-10-21, M1 to M3 are Verified by automated tests, with Gemini mocked. 
 | [0004](ADR/0004-secret-scan-gate-before-ai.md) | Secret scan gates AI review | Accepted (brief) |
 | [0005](ADR/0005-async-webhook-processing.md) | Asynchronous webhook processing | Proposed |
 | [0006](ADR/0006-github-identity-pat-then-app.md) | GitHub identity: PAT, then GitHub App | Proposed |
+| [0007](ADR/0007-ssm-placeholders-with-write-only-values.md) | SSM placeholders with write-only values | Accepted |
 
 See the [ADR index](ADR/README.md) for the process.
 

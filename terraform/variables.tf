@@ -1,5 +1,5 @@
 # Variables from docs/DEPLOYMENT.md section 4. Defaults reproduce the project brief.
-# They are declared here (T-103) and wired to resources in T-401.
+# Declared in T-103 and used by main.tf since T-401.
 
 variable "aws_region" {
   description = "AWS region to deploy into."
@@ -82,6 +82,17 @@ variable "max_files" {
   validation {
     condition     = var.max_files > 0 && var.max_files <= 3000
     error_message = "max_files must be between 1 and 3000 (GitHub's limit for the PR files API)."
+  }
+}
+
+variable "log_level" {
+  description = "Minimum level of the Lambda's JSON logs (MERGEGUARD_LOG_LEVEL)."
+  type        = string
+  default     = "INFO"
+
+  validation {
+    condition     = contains(["DEBUG", "INFO", "WARNING", "ERROR"], var.log_level)
+    error_message = "log_level must be DEBUG, INFO, WARNING or ERROR."
   }
 }
 

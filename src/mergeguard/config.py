@@ -19,6 +19,10 @@ CORE_SECRET_NAMES = ("github_token", "webhook_secret")
 # Loaded only when an AI review is actually requested, so a missing Gemini key
 # degrades to the AI-unavailable comment instead of blocking the secret gate.
 GEMINI_KEY_NAME = "gemini_api_key"
+# Terraform creates each parameter with a public placeholder value (ADR-0007).
+# A value starting with this prefix counts as "not set": core secrets fail
+# closed, and a placeholder Gemini key means no diff is ever sent to Gemini.
+PLACEHOLDER_PREFIX = "mergeguard-placeholder"
 
 _TRUE = frozenset({"1", "true", "yes"})
 _FALSE = frozenset({"0", "false", "no"})
@@ -148,6 +152,10 @@ class SecretStore:
             value = values.get(full_name)
             if not isinstance(value, str) or not value:
                 raise ConfigError(f"SSM parameter {full_name} is missing or empty")
+            if value.startswith(PLACEHOLDER_PREFIX):
+                raise ConfigError(
+                    f"SSM parameter {full_name} still holds the placeholder"
+                )
             resolved[name] = value
         return resolved
 

@@ -1,6 +1,6 @@
 # MergeGuard AI — Serverless DevSecOps PR Reviewer
 
-> **Status: in development (M3).** The webhook pipeline (signature check, secret scanner, review posting) and the Gemini AI review are implemented and tested, but **not deployed**. The Gemini integration has only been tested against mocked responses. AWS infrastructure (M4) is not built yet. See the [roadmap](docs/PRD.md#18-roadmap) and [backlog](docs/TASKS.md).
+> **Status: in development (M4).** The webhook pipeline, the Gemini AI review and the Terraform stack are implemented and tested, but **never deployed**. Gemini has only been tested against mocked responses, and Terraform only with a mocked AWS provider. See the [roadmap](docs/PRD.md#18-roadmap) and [backlog](docs/TASKS.md).
 
 MergeGuard AI reviews GitHub pull requests automatically, without any server to run:
 

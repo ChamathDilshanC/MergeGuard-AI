@@ -16,5 +16,6 @@ Each ADR records one decision: its context, the choice, the alternatives, and th
 | [0004](0004-secret-scan-gate-before-ai.md) | Deterministic secret scan gates AI review | Accepted (brief) | 2026-10-21 |
 | [0005](0005-async-webhook-processing.md) | Asynchronous webhook processing | Proposed | 2026-10-21 |
 | [0006](0006-github-identity-pat-then-app.md) | GitHub identity: PAT first, then GitHub App | Proposed | 2026-10-21 |
+| [0007](0007-ssm-placeholders-with-write-only-values.md) | Terraform-managed SSM placeholders with write-only values | Accepted | 2026-10-21 |
 
 **New ADRs:** copy the structure of an existing one, take the next number, and add a row here. Never rewrite an accepted ADR; supersede it with a new one.

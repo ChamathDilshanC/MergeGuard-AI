@@ -1,6 +1,6 @@
 # ADR-0003 — Secrets in SSM Parameter Store
 
-- **Status:** Accepted (brief) — not yet implemented
+- **Status:** Accepted (brief). The second decision bullet is amended by [ADR-0007](0007-ssm-placeholders-with-write-only-values.md): Terraform now manages the parameters with write-only placeholders, and values still never enter state
 - **Date:** 2026-10-21
 - **Related:** [SECURITY.md](../SECURITY.md) §5.4, §6 · PRD FR-011
 

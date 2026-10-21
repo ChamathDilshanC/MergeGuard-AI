@@ -9,7 +9,7 @@
 | Last updated | 2026-10-21 |
 | Related | [Architecture](ARCHITECTURE.md) · [API spec](API_SPEC.md) · [Security](SECURITY.md) · [Tasks](TASKS.md) |
 
-> **Implementation status:** M1 (skeleton, tooling, CI), M2 (webhook pipeline) and M3 (Gemini review, tested with mocked responses only) are implemented. AWS resources (T-401), the AI evaluation (T-304) and any deployment do not exist yet. Section 7 shows the status of each capability — see the [status legend](README.md#status-legend).
+> **Implementation status:** M1 (skeleton, tooling, CI), M2 (webhook pipeline) and M3 (Gemini review, tested with mocked responses only) are implemented. The M4 Terraform stack is written and plan-tested but has never been applied; the AI evaluation (T-304) and any deployment do not exist yet. Section 7 shows the status of each capability — see the [status legend](README.md#status-legend).
 
 ---
 
@@ -92,7 +92,7 @@ Status as of M2: "Verified (M2 tests)" means implemented and covered by the auto
 
 | Feature | Status | Phase | Requirement |
 | --- | --- | --- | --- |
-| HTTPS webhook endpoint | Handler Verified (M2 tests); API Gateway Planned (T-401) | 1 | FR-001 |
+| HTTPS webhook endpoint | Handler Verified (M2 tests); API Gateway Verified by plan tests (M4), not applied | 1 | FR-001 |
 | Webhook signature verification | Verified (M2 tests) | 1 | FR-002 |
 | Event and action filtering | Verified (M2 tests) | 1 | FR-003 |
 | Changed-file retrieval with pagination | Verified (M2 tests) | 1 | FR-004 |
@@ -102,8 +102,8 @@ Status as of M2: "Verified (M2 tests)" means implemented and covered by the auto
 | AI output validation and fail-open | Verified (M3 tests, mocked Gemini) | 1 | FR-008 |
 | Review rendering and sanitisation | Verified (M2 tests) | 1 | FR-009 |
 | Review decision policy | Verified (M2 tests) | 1 | FR-010 |
-| Secrets in SSM Parameter Store | Loader Verified (M2 tests); IAM Planned (T-401) | 1 | FR-011 |
-| Terraform infrastructure | Skeleton Verified (M1); resources Planned (T-401) | 1 | FR-012 |
+| Secrets in SSM Parameter Store | Loader Verified (M2 tests); IAM and placeholders Verified by plan tests (M4) | 1 | FR-011 |
+| Terraform infrastructure | Verified by plan tests (M4); never applied | 1 | FR-012 |
 | Structured, redacted logging | Verified (M2 tests) | 1 | FR-013 |
 | Duplicate-review prevention | Verified (M2 tests) | 1 | FR-014 |
 | Dry-run mode | Verified (M2 tests) | 1 | FR-015 |
